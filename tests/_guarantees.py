@@ -94,9 +94,12 @@ GUARANTEES: dict[str, str] = {
         "channel and a repeated channel are each refused by name. Acceptances "
         "ACCUMULATE: a later acceptance, of a new version or of the same one again, is "
         "a further row and never a rewrite, and the row current for a version is the "
-        "one with the latest accepted_at. Every channel row carries its own "
-        "consented_by and consented_at, stated and never defaulted; a channel written "
-        "with its acceptance carries the acceptance's own instant and name -- one clock."
+        "one with the latest accepted_at. They are read in ONE STATED ORDER -- "
+        "accepted_at, created_at, id -- so two acceptances sharing an instant come back "
+        "the same way on every read, ordered by id: deterministically, and ARBITRARILY, "
+        "and the contract says so. Every channel row carries its own consented_by and "
+        "consented_at, stated and never defaulted; a channel written with its acceptance "
+        "carries the acceptance's own instant and name -- one clock."
     ),
     "G12": (
         "A password is hashed with the standard library's scrypt under parameters "
@@ -122,6 +125,24 @@ GUARANTEES: dict[str, str] = {
         "This module has no HTTP surface and sends nothing: no web framework, no HTTP "
         "server and no mail or SMS client is imported anywhere in the package, read "
         "from the AST of every source file -- a planted import goes red."
+    ),
+    "G16": (
+        "THE FOLD IS THE DATABASE'S, AND THE STORE STATES WHAT IT REQUIRES OF IT. "
+        "Whether two addresses are one is answered by lower(email) under the collation "
+        "customers.email carries -- the unique index's own expression -- and by nothing "
+        "in Python, so every door gives the same answer; and migration 0001 REFUSES TO "
+        "APPLY, by name and before creating anything, on a database whose default "
+        "collation folds ASCII only (libc with LC_CTYPE C or POSIX, measured) or comes "
+        "from a locale provider the fold was not measured under. The suite proves the "
+        "refusal fires on a C-collated database in the same cluster, beside the apply "
+        "that proceeds."
+    ),
+    "G17": (
+        "A CONTROL THAT CRASHED DID NOT FIRE. scripts/fail_controls.py counts a plant as "
+        "fired only when its target's tests RAN AND FAILED; a target that errored, "
+        "failed to collect or did not run under the plant is reported NOT A CONTROL, "
+        "distinctly from RED, and fails the run -- so the instrument cannot go falsely "
+        "green on a plant that broke the interpreter instead of the subject."
     ),
 }
 

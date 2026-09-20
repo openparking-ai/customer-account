@@ -78,13 +78,15 @@ customer registering themselves has none. Unique where given.
 | **G8** | An email change does not take effect until confirmed at the NEW address, and the old address keeps working until it does. Who authorised the change is STORED: the customer's current password, verified by this module, or an explicit caller authorisation -- exactly one, refused by name when neither or both is given -- and the authorisation travels onto the history row. |
 | **G9** | A password reset is delivered to the customer's CURRENT address, read from the row at issue and never supplied by the caller: the command line has no option for it, and a pending, unconfirmed email change does not move it. A reset resets a password that exists. |
 | **G10** | The email history, the terms acceptances and their channels are APPEND-ONLY BY GRANT: the application role holds SELECT and INSERT on them and nothing else, holds DELETE on no table in the schema, and the set of append-only tables is read from the catalogue and is exactly those three -- with a table the role CAN update accepting an update in the same run, as the control that the grant check can see a grant. |
-| **G11** | Consent is ONE acceptance, itemised: it records the terms version, the text shown, who accepted and when, and for each channel consented to the text shown for it -- never a boolean. An account is created with its first acceptance in the same transaction or not at all; a blank text, an unknown channel and a repeated channel are each refused by name. Acceptances ACCUMULATE: a later acceptance, of a new version or of the same one again, is a further row and never a rewrite, and the row current for a version is the one with the latest accepted_at. Every channel row carries its own consented_by and consented_at, stated and never defaulted; a channel written with its acceptance carries the acceptance's own instant and name -- one clock. |
+| **G11** | Consent is ONE acceptance, itemised: it records the terms version, the text shown, who accepted and when, and for each channel consented to the text shown for it -- never a boolean. An account is created with its first acceptance in the same transaction or not at all; a blank text, an unknown channel and a repeated channel are each refused by name. Acceptances ACCUMULATE: a later acceptance, of a new version or of the same one again, is a further row and never a rewrite, and the row current for a version is the one with the latest accepted_at. They are read in ONE STATED ORDER -- accepted_at, created_at, id -- so two acceptances sharing an instant come back the same way on every read, ordered by id: deterministically, and ARBITRARILY, and the contract says so. Every channel row carries its own consented_by and consented_at, stated and never defaulted; a channel written with its acceptance carries the acceptance's own instant and name -- one clock. |
 | **G12** | A password is hashed with the standard library's scrypt under parameters that are STATED, never defaulted, and STORED beside every hash; verification reads the row's parameters, so a row hashed under different parameters still verifies and raising them invalidates nothing. The comparison is constant-time, and the one rule on a password is a stated minimum length. |
 | **G13** | Nothing real is in the tree: no card-shaped value, no email address that is not obviously invented, and no name from the maintainer's other software, in any tracked file, tests and fixtures included -- swept in Python over the file set git reports, with each sweep proven to fire on its probe first. |
 | **G14** | The command line refuses, never tracebacks: every Refused reaches the boundary as {refused, field, detail} with exit 3; a machine that is not set up -- no DSN, a database that does not connect -- is one sentence on stderr with exit 2; a malformed instant, an unreadable text file and a malformed channel pair are each refused by name. |
 | **G15** | This module has no HTTP surface and sends nothing: no web framework, no HTTP server and no mail or SMS client is imported anywhere in the package, read from the AST of every source file -- a planted import goes red. |
+| **G16** | THE FOLD IS THE DATABASE'S, AND THE STORE STATES WHAT IT REQUIRES OF IT. Whether two addresses are one is answered by lower(email) under the collation customers.email carries -- the unique index's own expression -- and by nothing in Python, so every door gives the same answer; and migration 0001 REFUSES TO APPLY, by name and before creating anything, on a database whose default collation folds ASCII only (libc with LC_CTYPE C or POSIX, measured) or comes from a locale provider the fold was not measured under. The suite proves the refusal fires on a C-collated database in the same cluster, beside the apply that proceeds. |
+| **G17** | A CONTROL THAT CRASHED DID NOT FIRE. scripts/fail_controls.py counts a plant as fired only when its target's tests RAN AND FAILED; a target that errored, failed to collect or did not run under the plant is reported NOT A CONTROL, distinctly from RED, and fails the run -- so the instrument cannot go falsely green on a plant that broke the interpreter instead of the subject. |
 
-That is 15 guarantees. Every one of them has a fail control that has been proven to fire, and the count above is derived from the registry rather than typed here.
+That is 17 guarantees. Every one of them has a fail control that has been proven to fire, and the count above is derived from the registry rather than typed here.
 <!-- END:guarantees -->
 
 ## The password
@@ -122,6 +124,8 @@ One acceptance, itemised. The channels consent may be recorded for, by name:
 - `sms`
 
 That is 2 channels. A third is a migration and a contract change, not a value somebody types.
+
+Acceptances accumulate and are read oldest first in the order `accepted_at`, `created_at`, `id`: the row current for a version is the latest by `accepted_at`, and two acceptances sharing an instant are ordered by `id` -- deterministically, the same way on every read, but ARBITRARILY: that order means nothing.
 <!-- END:channels -->
 
 ## Refusals
@@ -142,8 +146,8 @@ the command line with exit 3, never a traceback.
 | `REFUSAL_CUSTOMER_NOT_FOUND` | No customer of this operator has the id or the address given. |
 | `REFUSAL_DOCUMENT_UNREADABLE` | A file named on the command line -- the text shown for the terms or for a channel -- could not be read: missing, not a regular file, unreadable, or not text. The detail names the path and what went wrong. |
 | `REFUSAL_EMAIL_MALFORMED` | The email address does not look like one -- it needs an @ with something before it and something after it. The rule is the one the sibling pass module ships for a holder's address, copied; nothing more is checked, because nothing more can be checked without sending mail. |
-| `REFUSAL_EMAIL_TAKEN` | Another customer of this operator already carries this email address, compared without regard to case. One address, one account per operator: the address is how a customer is found, and two accounts behind it would make a password reset ambiguous. Nothing is written. |
-| `REFUSAL_EMAIL_UNCHANGED` | The new address is the customer's current one. There is nothing to confirm and nothing to change. |
+| `REFUSAL_EMAIL_TAKEN` | Another customer of this operator already carries this email address, compared without regard to case -- the database's lower() under the collation the column carries, the same expression the unique index is on; nothing in Python folds an address. One address, one account per operator: the address is how a customer is found, and two accounts behind it would make a password reset ambiguous. Nothing is written. |
+| `REFUSAL_EMAIL_UNCHANGED` | The new address is the customer's current one, as the store compares addresses -- the same answer create-account would give. There is nothing to confirm and nothing to change. |
 | `REFUSAL_EXPIRED_IS_DERIVED` | A token's 'expired' is derived from its expires_at against the instant asked about and is never typed by anyone. |
 | `REFUSAL_EXTERNAL_ID_TAKEN` | Another customer of this operator already carries this operator-facing reference. It is optional -- a customer registering themselves has none -- and unique where given. |
 | `REFUSAL_FIELD_BLANK` | A required value is blank or malformed. The field is named beside this code, with what was expected. |
@@ -197,6 +201,28 @@ half of a composite tenant key. The application connects as a role created
 role that COULD be stopped before they assert that it was. The three
 histories -- email changes, acceptances, their channels -- are append-only by
 grant, and the role holds DELETE on no table.
+
+**The fold is the database's.** "Unique per operator without regard to case"
+is `lower(email)` under the collation `customers.email` carries -- the
+expression the unique index is on and the one every door asks. Nothing in
+Python folds an address. What that fold is depends on the database: measured
+on PostgreSQL 16, the libc provider with `LC_CTYPE` `C` or `POSIX` folds ASCII
+letters only, so `Élodie@` and `élodie@` would be two accounts there; every
+other libc `LC_CTYPE` and the ICU provider fold beyond ASCII. Which code
+points fold, beyond that, differs between platforms and providers (the gate
+measured `İ` folding differently on glibc, macOS and ICU) -- the module
+promises the database's answer, not a table of its own.
+
+### What the migration requires of the database
+
+<!-- GENERATED:install -->
+| the migration refuses, by name | when |
+|---|---|
+| `MIGRATION_REFUSAL_CASE_FOLD_ASCII_ONLY` | this database's default collation folds case for ASCII letters only, so two spellings of one address that differ in the case of an accented letter would be two accounts of one operator. This module requires a database whose lower() folds beyond ASCII: create it with a UTF-8 LC_CTYPE (for example en_US.UTF-8) or with the ICU locale provider, and apply this migration again. Nothing was created. |
+| `MIGRATION_REFUSAL_LOCALE_PROVIDER_UNMEASURED` | this database's default collation comes from a locale provider this module's case fold has not been measured under (libc and ICU were). It is refused rather than assumed to fold beyond ASCII. Nothing was created. |
+
+That is 2 named refusals in `0001_tenants_customers_credentials_consent_and_rls.sql`'s pre-flight, read from the file. Each is raised BEFORE anything is created, inside the migration's own transaction, so a refused apply leaves the database as it found it. The requirement is an install requirement and not a caveat: `customers.email` carries no collation of its own, so the fold that makes one address one account is the database's default collation, and the pre-flight judges exactly that.
+<!-- END:install -->
 
 ## Versioning
 

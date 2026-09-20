@@ -31,6 +31,19 @@ tell you whether a control fired. Check the runner (is the package installed? is
 a database reachable for the ones that need one?) before reading anything into
 the subject.
 
+**A CONTROL THAT CRASHED DID NOT FIRE, AND IS NOT COUNTED.** A plant fires only
+when its target's tests RAN AND FAILED: pytest's exit status 1, a summary naming
+``N failed`` and naming no error. A target that errored under the plant (a
+fixture that could not set up, ``N errors``), failed to collect (a syntax error
+or a broken import, exit 2), or hit anything else that is not a failed
+assertion is reported **NOT A CONTROL (crashed)** -- distinctly from RED, and
+distinctly from the green kind of NOT A CONTROL -- and fails the run. The first
+form of this script read a non-zero exit as fired, so a plant that broke the
+interpreter instead of the subject was reported as a control that worked: the
+merge gate measured two such plants of its own reading "RED, as required -- 1
+error". That failed OPEN, which is the one failure this project has never
+accepted from an instrument; ``verdict`` below is the fix, and G17 holds it.
+
 **A TARGET WHOSE TESTS ALL SKIP IS REPORTED "NOT A CONTROL", NOT UNMEASURED, AND
 THAT IS THIS SCRIPT'S OWN LIMIT RATHER THAN A JUDGEMENT.** `_NOTHING_RAN` matches
 "0 passed", "no tests ran" and "collected 0 items"; an all-skipped target prints
@@ -366,6 +379,15 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "a channel written with its acceptance carries an instant of its own instead of the "
         "acceptance's -- two clocks for one consent",
     ),
+    "G11/tie": (
+        "tests/test_g11_consent_is_one_acceptance_itemised.py",
+        "store/records.py",
+        'ACCEPTANCE_ORDER = ("accepted_at", "created_at", "id")',
+        'ACCEPTANCE_ORDER = ("accepted_at", "created_at")  # PLANTED: no tiebreak',
+        "the tiebreak column is dropped from the one stated order, so eight acceptances "
+        "sharing an instant come back in whatever order the heap gives -- the gate measured "
+        "it stable and stated nowhere; the test requires id order",
+    ),
     "G12/row-parameters": (
         "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
         "passwords.py",
@@ -428,6 +450,41 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "import argparse\nimport dataclasses\nimport smtplib  # PLANTED: a mail client",
         "a mail client is imported into the command line, and the AST walk must see it",
     ),
+    "G16/pre-flight": (
+        "tests/test_g16_the_fold_is_the_databases_and_0001_states_what_it_requires.py",
+        "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
+        "  IF provider = 'c' AND ctype IN ('C', 'POSIX') THEN",
+        "  IF false THEN  -- PLANTED: the requirement is never judged",
+        "the pre-flight's condition never holds, so 0001 applies on a C-collated database "
+        "and Élodie@ and élodie@ become two accounts of one operator -- the test creates "
+        "that database in the cluster and requires the named refusal",
+    ),
+    "G16/python-fold": (
+        "tests/test_g16_the_fold_is_the_databases_and_0001_states_what_it_requires.py",
+        "store/records.py",
+        source(
+            "    holder = _address_holder(cursor, tenant_id, address)",
+            "    if holder == customer_id:",
+        ),
+        source(
+            "    holder = _address_holder(cursor, tenant_id, address)",
+            "    if address.lower() == load_customer(cursor, tenant_id, customer_id).email"
+            ".lower():  # PLANTED: a second authority",
+        ),
+        "the gate's blocker, planted back: start_email_change judges 'unchanged' by "
+        "Python's lower() while create_account judges by the database's, and the two "
+        "disagree on İ on every libc measured -- one door refuses an address as yours, "
+        "the next hands it to somebody else",
+    ),
+    "G17": (
+        "tests/test_g17_a_crashed_control_is_not_a_control.py",
+        "scripts/fail_controls.py",
+        "    if red.returncode != _TESTS_FAILED or not _FAILED.search(summary) or "
+        "_ERRORS.search(summary):",
+        "    if False:  # PLANTED: any non-zero exit is a fired control",
+        "the crash branch is removed, so a plant that broke the interpreter reads 'RED, as "
+        "required' again -- the instrument fails open, which is what the gate measured",
+    ),
 }
 
 
@@ -467,6 +524,35 @@ def _pytest(target: str) -> subprocess.CompletedProcess:
 #: the machinery built to enforce it.
 _NOTHING_RAN = re.compile(r"(?<!\d)0 passed|no tests ran|collected 0 items")
 
+#: pytest's exit status when tests ran and some failed. 2 is "interrupted" (a
+#: collection error, a syntax error in a test module), 3 an internal error, 4
+#: a usage error, 5 nothing collected -- none of those is a fired assertion.
+_TESTS_FAILED = 1
+_FAILED = re.compile(r"(?<!\d)\d+ failed")
+_ERRORS = re.compile(r"(?<!\d)\d+ errors?(?!\w)")
+
+FIRED = "FIRED"
+GREEN = "GREEN"
+CRASHED = "CRASHED"
+
+
+def verdict(red: subprocess.CompletedProcess) -> tuple[str, str]:
+    """What a planted run proves: ``FIRED`` (its tests ran and failed), ``GREEN``
+    (nothing noticed the plant) or ``CRASHED`` (the plant broke the runner, not
+    the subject -- which proves nothing about the subject either way).
+
+    The three are judged from pytest's exit status AND its summary line, both:
+    an exit of 1 with ``N failed`` and no ``N error(s)`` is the only shape that
+    is a fired assertion. A crash can also exit 1 (a fixture error is ``1
+    error`` at exit 1), which is why the status alone was never enough."""
+    lines = red.stdout.strip().splitlines()
+    summary = lines[-1] if lines else ""
+    if red.returncode == 0:
+        return GREEN, summary
+    if red.returncode != _TESTS_FAILED or not _FAILED.search(summary) or _ERRORS.search(summary):
+        return CRASHED, f"exit {red.returncode}, {summary!r}"
+    return FIRED, summary
+
 
 def run_control(gid: str) -> bool:
     target, path, anchor, replacement, why = CONTROLS[gid]
@@ -488,9 +574,16 @@ def run_control(gid: str) -> bool:
         red = _pytest(target)
 
     tail = [ln for ln in red.stdout.splitlines() if ln.startswith(("FAILED", "ERROR"))]
-    summary = red.stdout.strip().splitlines()[-1] if red.stdout.strip() else ""
-    if red.returncode == 0:
+    outcome, summary = verdict(red)
+    if outcome == GREEN:
         print(f"    NOT A CONTROL: {target} stayed GREEN with its subject broken.")
+        return False
+    if outcome == CRASHED:
+        print(f"    NOT A CONTROL (crashed): {target} did not run to a failed assertion under "
+              f"the plant — {summary}. A run that crashed proves nothing about the subject.")
+        for line in tail[:6]:
+            print(f"      {line}")
+        print(red.stdout[-600:] if not tail else "")
         return False
     print(f"    RED, as required — {summary}")
     for line in tail[:6]:

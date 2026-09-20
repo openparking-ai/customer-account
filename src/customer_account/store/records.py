@@ -70,7 +70,6 @@ from customer_account.findings import (
 )
 from customer_account.identity import (
     Customer,
-    folded,
     optional_text,
     require_aware,
     require_email,
@@ -108,6 +107,18 @@ SUPERSEDED = "superseded"
 
 PENDING_EMAIL_CHANGES = "pending_email_changes"
 CREDENTIAL_RESETS = "credential_resets"
+
+#: The order a customer's acceptances are read in, oldest first, and the ONE
+#: place it is written: ``show_acceptances`` orders by it and the contract
+#: renders it. ``accepted_at`` is the rule (the row current for a version is
+#: the latest); ``created_at`` is the row's own clock, which ties with
+#: ``accepted_at`` for two acceptances written in one transaction (``now()`` is
+#: the transaction's instant); ``id`` is the final tiebreak, unique on every
+#: row. Two acceptances sharing an instant are therefore ordered
+#: DETERMINISTICALLY BUT ARBITRARILY -- the same order on every read, and an
+#: order that means nothing. Measured in the gate: without the last column the
+#: order was stable 150/150 and stated nowhere, which is behaviour, not a rule.
+ACCEPTANCE_ORDER = ("accepted_at", "created_at", "id")
 
 
 def as_uuid(value: Any) -> UUID:
@@ -157,7 +168,8 @@ def load_customer(
 
 
 def find_customer_by_email(cursor: Any, tenant_id: UUID, email: str) -> Customer:
-    """By the CASE-FOLDED address -- the form uniqueness is enforced in."""
+    """By the address as the store folds it -- the form uniqueness is enforced
+    in (see ``_address_holder``)."""
     address = require_email(email)
     cursor.execute(
         f"SELECT {_CUSTOMER_COLUMNS} FROM customers WHERE tenant_id = %s "
@@ -171,7 +183,12 @@ def find_customer_by_email(cursor: Any, tenant_id: UUID, email: str) -> Customer
 
 
 def _address_holder(cursor: Any, tenant_id: UUID, email: str) -> UUID | None:
-    """Which customer, if any, carries this address (case-folded)."""
+    """Which customer, if any, carries this address -- THE ONE AUTHORITY on
+    whether two addresses are one. The fold is the database's ``lower()``
+    under the collation ``customers.email`` carries (the database's default;
+    migration 0001 refuses to apply where that folds ASCII only), the same
+    expression the unique index is on, so the module and the constraint can
+    never disagree. Nothing in Python folds an address."""
     cursor.execute(
         "SELECT id FROM customers WHERE tenant_id = %s AND lower(email) = lower(%s)",
         (str(tenant_id), email),
@@ -273,12 +290,14 @@ def show_acceptances(cursor: Any, tenant_id: UUID, customer_id: UUID) -> list[di
     included: this is the read that answers "what did they agree to".
     Acceptances ACCUMULATE -- a later one is a further entry, never a
     rewrite -- so the last entry for a version is the current one; each
-    channel carries its own consented_by and consented_at."""
+    channel carries its own consented_by and consented_at. The order is
+    ``ACCEPTANCE_ORDER``, ending in ``id`` so that a full tie still reads the
+    same way twice."""
     tenant_id, customer_id = as_uuid(tenant_id), as_uuid(customer_id)
     load_customer(cursor, tenant_id, customer_id)
     cursor.execute(
         "SELECT id, terms_version, terms_shown, accepted_by, accepted_at FROM terms_acceptances "
-        "WHERE tenant_id = %s AND customer_id = %s ORDER BY accepted_at, created_at",
+        f"WHERE tenant_id = %s AND customer_id = %s ORDER BY {', '.join(ACCEPTANCE_ORDER)}",
         (str(tenant_id), str(customer_id)),
     )
     out = []
@@ -520,15 +539,23 @@ def start_email_change(
         raise Refused(
             REFUSAL_AUTHORISATION_MISSING, "by", "neither a password nor --by was given."
         )
-    customer = load_customer(cursor, tenant_id, customer_id, lock=True)
+    # The row is locked here (LOCK_ORDER: the customer first) and an unknown
+    # customer is refused by name; nothing on the row is read in Python.
+    load_customer(cursor, tenant_id, customer_id, lock=True)
     if has_password:
         _require_password_verified(cursor, tenant_id, customer_id, require_password(password))
         authorisation, authorised_by = BY_PASSWORD, str(customer_id)
     else:
         authorisation, authorised_by = BY_CALLER, caller
-    if folded(address) == folded(customer.email):
-        raise Refused(REFUSAL_EMAIL_UNCHANGED, "new_email", "it is the current address.")
+    # "Is this already your address" is answered by the STORE, the same
+    # authority create_account and confirm_email_change use, and by nothing
+    # in Python: the gate measured Python's lower() and the database's
+    # disagreeing on 28 code points on CI's own database, so a comparison
+    # made here said "unchanged" for an address the next door would then
+    # hand to a second customer.
     holder = _address_holder(cursor, tenant_id, address)
+    if holder == customer_id:
+        raise Refused(REFUSAL_EMAIL_UNCHANGED, "new_email", "it is the current address.")
     if holder is not None:
         raise Refused(REFUSAL_EMAIL_TAKEN, "new_email", "another customer carries this address.")
     superseded = _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,

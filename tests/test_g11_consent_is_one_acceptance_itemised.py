@@ -24,11 +24,27 @@ a channel to an old acceptance by a raw insert, so every channel row carries
 with its acceptance carries the acceptance's own instant and name, and the
 test below holds the two equal so nobody invents a second clock.
 
+**THE ORDER IS STATED, AND A FULL TIE IS ORDERED BY id.** The gate measured
+that two acceptances written in one transaction tie on ``accepted_at`` AND on
+``created_at`` (``now()`` is the transaction's instant), and that the read
+order was stable 150/150 -- behaviour, stated nowhere. ``records.
+ACCEPTANCE_ORDER`` is now the one place the order is written: ``accepted_at,
+created_at, id``. ``id`` is unique on every row, so a full tie reads the same
+way on every read; the order it gives is ARBITRARY and the contract says so.
+``clock_timestamp()`` on ``created_at`` was rejected: every table here
+defaults ``created_at`` to ``now()``, and one rule in two places is the
+error this project keeps paying for. The tie test below writes eight
+acceptances in one transaction so the chance that insertion order happens to
+equal id order, and the old ordering reads the same by luck, is 1 in 40,320.
+
 Controls: the blank-text check planted away; the creation's acceptance
-planted away; the channel's instant planted to a clock of its own.
+planted away; the channel's instant planted to a clock of its own; the
+tiebreak column planted away.
 """
 
 from __future__ import annotations
+
+from uuid import UUID
 
 import pytest
 
@@ -36,6 +52,7 @@ from customer_account import findings as f
 from customer_account.consent import Channel, ChannelShown, build_acceptance
 from customer_account.store.postgres import tenant
 from customer_account.store.records import (
+    ACCEPTANCE_ORDER,
     create_account,
     record_acceptance,
     show_acceptances,
@@ -203,6 +220,54 @@ def test_the_migration_refuses_an_unknown_channel_and_a_blank_text_on_a_raw_writ
                     (str(tenant_id), str(acceptance_id), channel, text, LATER),
                 )
     assert customer_id is not None
+
+
+@pytest.mark.guarantee("G11")
+def test_acceptances_sharing_an_instant_tie_on_both_clocks_and_are_read_in_id_order(
+    app, tenant_id
+):
+    """Eight acceptances in ONE transaction, all at LATER: accepted_at ties by
+    construction and created_at ties because now() is the transaction's
+    instant -- both measured here, not assumed -- and the read comes back in
+    id order, the stated tiebreak."""
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        for n in range(8):
+            record_acceptance(cursor, tenant_id, customer_id, acceptance(
+                "v1", at=LATER, by=f"writer {n}",
+                channels=(ChannelShown(Channel.SMS, f"Texts, agreed to again ({n})."),)))
+        recorded = show_acceptances(cursor, tenant_id, customer_id)
+    app.commit()
+    tied = [row for row in recorded if row["accepted_at"] == LATER]
+    assert len(tied) == 8 and recorded[0]["accepted_at"] == CREATED_AT
+    clocks = query(app, tenant_id, "SELECT count(DISTINCT created_at) FROM terms_acceptances "
+                   "WHERE customer_id = %s AND accepted_at = %s", (str(customer_id), LATER))
+    assert clocks == [(1,)], "created_at did not tie, so this measured nothing about the tie"
+    ids = [UUID(row["acceptance"]) for row in tied]
+    assert ids == sorted(ids), "a full tie is read in id order"
+    assert ACCEPTANCE_ORDER == ("accepted_at", "created_at", "id")
+
+
+@pytest.mark.guarantee("G11")
+def test_the_tiebreak_changes_nothing_for_acceptances_that_do_not_tie(app, tenant_id):
+    """THE OVER-REACH CONTROL: on a pair with distinct accepted_at the old
+    ordering and the stated one read identically -- the current row is still
+    the latest accepted_at."""
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        record_acceptance(cursor, tenant_id, customer_id, acceptance(
+            "v1", at=LATER, by="the customer, again",
+            channels=(ChannelShown(Channel.SMS, "Texts, agreed to later."),)))
+    app.commit()
+    select = "SELECT id FROM terms_acceptances WHERE customer_id = %s ORDER BY "
+    old = query(app, tenant_id, select + "accepted_at, created_at", (str(customer_id),))
+    stated = query(app, tenant_id, select + ", ".join(ACCEPTANCE_ORDER), (str(customer_id),))
+    assert old == stated and len(stated) == 2
+    with tenant(app, tenant_id) as cursor:
+        recorded = show_acceptances(cursor, tenant_id, customer_id)
+    app.rollback()
+    assert [str(row[0]) for row in stated] == [row["acceptance"] for row in recorded]
+    assert recorded[-1]["accepted_at"] == LATER, "the current row is the latest accepted_at"
 
 
 @pytest.mark.guarantee("G11")

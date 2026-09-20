@@ -26,6 +26,61 @@
 BEGIN;
 
 -- ---------------------------------------------------------------------------
+-- THE PRE-FLIGHT: what this schema requires of the database, refused BY NAME
+-- where it does not hold. Nothing below is created when it fires.
+--
+-- The identity rule -- one address, one account per operator, compared
+-- without regard to case -- is `lower(email)` under the collation
+-- `customers.email` carries, which is the expression the unique index below
+-- is on and the one every door asks. The column carries no COLLATE clause,
+-- so that collation is the DATABASE'S DEFAULT: pg_database.datlocprovider
+-- and pg_database.datctype. MEASURED (78 rows, every provider and ctype
+-- shape PostgreSQL 16 offers, the fix round of 2026-09-20): under the libc
+-- provider with LC_CTYPE C or POSIX, lower() folds ASCII letters only, so
+-- Élodie@ and élodie@ are TWO accounts; under any other libc LC_CTYPE and
+-- under ICU they are one. datctype ALONE does not predict it (ICU with
+-- datctype C folds), and `current_setting('lc_ctype')` is not a parameter
+-- on PostgreSQL 16 -- so the provider and the ctype are read together, from
+-- the catalogue. A provider this was not measured under is refused by name
+-- rather than assumed: a refusal, never a default, never an inference.
+--
+-- Before PostgreSQL 15 there is no datlocprovider column and every collation
+-- is libc; the block reads it only where it exists.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  provider text := 'c';
+  ctype    text;
+BEGIN
+  SELECT datctype INTO ctype FROM pg_database WHERE datname = current_database();
+  IF EXISTS (SELECT 1 FROM pg_attribute
+             WHERE attrelid = 'pg_catalog.pg_database'::regclass
+               AND attname = 'datlocprovider') THEN
+    EXECUTE 'SELECT datlocprovider::text FROM pg_database WHERE datname = current_database()'
+      INTO provider;
+  END IF;
+  IF provider = 'c' AND ctype IN ('C', 'POSIX') THEN
+    RAISE EXCEPTION 'MIGRATION_REFUSAL_CASE_FOLD_ASCII_ONLY: this database''s default collation '
+      'folds case for ASCII letters only, so two spellings of one address that differ in the '
+      'case of an accented letter would be two accounts of one operator. This module requires '
+      'a database whose lower() folds beyond ASCII: create it with a UTF-8 LC_CTYPE (for '
+      'example en_US.UTF-8) or with the ICU locale provider, and apply this migration again. '
+      'Nothing was created.'
+      USING DETAIL = format('locale provider %s, LC_CTYPE %s.',
+                            CASE provider WHEN 'c' THEN 'libc' ELSE provider END, ctype),
+            ERRCODE = 'invalid_parameter_value';
+  ELSIF provider NOT IN ('c', 'i') THEN
+    RAISE EXCEPTION 'MIGRATION_REFUSAL_LOCALE_PROVIDER_UNMEASURED: this database''s default '
+      'collation comes from a locale provider this module''s case fold has not been measured '
+      'under (libc and ICU were). It is refused rather than assumed to fold beyond ASCII. '
+      'Nothing was created.'
+      USING DETAIL = format('locale provider %s, LC_CTYPE %s.', provider, ctype),
+            ERRCODE = 'invalid_parameter_value';
+  END IF;
+END
+$$;
+
+-- ---------------------------------------------------------------------------
 -- The application role.
 --
 -- NOSUPERUSER and NOBYPASSRLS are the whole point. A superuser bypasses
@@ -82,7 +137,11 @@ CREATE POLICY tenants_self_only ON tenants
 -- carries, copied: one @ with text on both sides. Uniqueness is on the
 -- CASE-FOLDED address -- `Alice@` and `alice@` are one mailbox, and two
 -- accounts behind one mailbox would make a password reset ambiguous. The
--- address is stored as given.
+-- address is stored as given. THE FOLD IS lower(email) UNDER THIS COLUMN'S
+-- COLLATION, which is the database's default (no COLLATE clause here, on
+-- purpose: the pre-flight above judges the database's default, and a clause
+-- here would take the column out from under it). The module folds nothing in
+-- Python; every door asks this expression.
 --
 -- `external_id` is OPTIONAL, and that is a decision: the sibling modules'
 -- rows are created by an operator who has a reference to supply, while a
@@ -337,6 +396,14 @@ CREATE POLICY credential_resets_tenant_isolation ON credential_resets
 -- that no door adds a channel to an existing acceptance, so a second
 -- acceptance is the only way later consent is recorded, and a UNIQUE here
 -- would forbid a real flow.
+--
+-- `created_at` defaults to now(), like every other table here: it is the
+-- TRANSACTION'S instant, so two acceptances written in one transaction tie
+-- on it as well as on accepted_at. The module reads acceptances in the order
+-- accepted_at, created_at, id -- `id` last, unique on every row -- so a full
+-- tie is ordered deterministically but ARBITRARILY, and the contract says so.
+-- clock_timestamp() here was considered and REJECTED: one rule held in two
+-- places is the error this project keeps paying for.
 -- ---------------------------------------------------------------------------
 CREATE TABLE terms_acceptances (
   id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),

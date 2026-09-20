@@ -32,6 +32,16 @@ operator without regard to case, and it can change — which is what makes
 "change email" and "forgot password" both possible at once. An account keyed
 on the email is orphaned the first time it changes.
 
+**The fold is the database's.** "Without regard to case" is `lower(email)`
+under the collation the column carries — the expression the unique index is
+on, and the one every door asks, `create-account` and `start-email-change`
+alike. Nothing in Python folds an address: a Python `lower()` beside the
+database's was measured to disagree with it on 28 code points on CI's own
+database, and to make one door refuse an address as "unchanged" that the next
+door handed to a second customer. What the database's fold is depends on how
+the database was created, which is why migration `0001` states it and refuses
+to apply where it does not hold — see *Install*.
+
 ## A password exists because the caller set one
 
 This module has **no view of whether anybody is charged**, and never infers
@@ -79,9 +89,13 @@ answer after the terms change. Never a boolean. Append-only by grant.
 
 Acceptances **accumulate**: a later acceptance, of a new version or of the
 same one again, is a further row and never a rewrite, and the row current for
-a version is the latest by `accepted_at`. Every channel row carries its own
-`consented_by` and `consented_at`; one written with its acceptance carries the
-acceptance's own instant and name.
+a version is the latest by `accepted_at`. They are read oldest first in the
+order `accepted_at`, `created_at`, `id` — two acceptances written in one
+transaction tie on the first two, and `id` orders them deterministically but
+**arbitrarily**; the contract says so rather than implying an order that does
+not exist. Every channel row carries its own `consented_by` and
+`consented_at`; one written with its acceptance carries the acceptance's own
+instant and name.
 
 ## Every guarantee has a control that has been proven to fire
 
@@ -109,6 +123,34 @@ pip install -e '.[dev]'       # plus pytest and ruff
 ```
 
 Python 3.11 or newer.
+
+**The database must fold case beyond ASCII, and migration `0001` refuses to
+apply where it does not — by name, before it creates anything.** The identity
+rule is the database's `lower()` under its default collation. Measured on
+PostgreSQL 16 across every locale provider and `LC_CTYPE` shape it offers: with
+the libc provider and `LC_CTYPE` `C` or `POSIX`, `lower()` folds ASCII letters
+only, so `Élodie@example.com` and `élodie@example.com` would be two accounts
+of one operator; every other libc `LC_CTYPE` and the ICU provider fold beyond
+ASCII. So create the database with a UTF-8 `LC_CTYPE` (`en_US.UTF-8`, for
+example) or with the ICU provider:
+
+```
+createdb --locale=en_US.UTF-8 --template=template0 customer_account
+```
+
+On a database whose default collation is libc `C`/`POSIX`, `0001` stops at
+`MIGRATION_REFUSAL_CASE_FOLD_ASCII_ONLY` with nothing created; on a locale
+provider the fold was not measured under, at
+`MIGRATION_REFUSAL_LOCALE_PROVIDER_UNMEASURED`. No extension is required and
+none is used — not `citext`, not a custom collation. The property judged is
+`pg_database.datlocprovider` with `pg_database.datctype`, because `datctype`
+alone does not predict the fold (ICU with `datctype = C` folds) and
+`lc_ctype` is not a parameter on PostgreSQL 16. `customers.email` carries no
+collation of its own on purpose: the pre-flight judges the database's default,
+and a `COLLATE` clause on the column would take it out from under that
+judgement. The suite proves the refusal fires by creating a `C`-collated
+database in the same cluster and applying `0001` to it, beside the apply that
+proceeds.
 
 ## The store
 

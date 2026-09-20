@@ -89,13 +89,16 @@ REFUSALS: dict[str, str] = {
     ),
     REFUSAL_EMAIL_TAKEN: (
         "Another customer of this operator already carries this email address, "
-        "compared without regard to case. One address, one account per operator: "
+        "compared without regard to case -- the database's lower() under the "
+        "collation the column carries, the same expression the unique index is on; "
+        "nothing in Python folds an address. One address, one account per operator: "
         "the address is how a customer is found, and two accounts behind it would "
         "make a password reset ambiguous. Nothing is written."
     ),
     REFUSAL_EMAIL_UNCHANGED: (
-        "The new address is the customer's current one. There is nothing to "
-        "confirm and nothing to change."
+        "The new address is the customer's current one, as the store compares "
+        "addresses -- the same answer create-account would give. There is nothing "
+        "to confirm and nothing to change."
     ),
     REFUSAL_EXTERNAL_ID_TAKEN: (
         "Another customer of this operator already carries this operator-facing "

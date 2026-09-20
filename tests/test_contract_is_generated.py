@@ -95,8 +95,8 @@ def test_a_refusal_sentence_moved_in_the_registry_moves_the_document():
     before = rendered()
     with planted(
         "findings.py",
-        '"The new address is the customer\'s current one. There is nothing to "',
-        '"PLANTED: the new address is the customer\'s current one. There is nothing to "',
+        '"The new address is the customer\'s current one, as the store compares "',
+        '"PLANTED: the new address is the customer\'s current one, as the store compares "',
     ):
         after = rendered()
     assert "PLANTED: the new address" in after and "PLANTED" not in before
@@ -123,3 +123,37 @@ def test_a_command_added_to_the_parser_moves_the_document_and_a_channel_too():
     with planted("consent.py", '    SMS = "sms"', '    SMS = "sms"\n    FAX = "fax"  # PLANTED'):
         after = rendered()
     assert "- `fax`" in after and "That is 3 channels" in after
+
+
+@pytest.mark.guarantee("G2")
+def test_the_acceptance_order_and_its_tiebreak_move_the_document():
+    before = rendered()
+    assert "in the order `accepted_at`, `created_at`, `id`" in before
+    assert "are ordered by `id`" in before
+    with planted("store/records.py",
+                 'ACCEPTANCE_ORDER = ("accepted_at", "created_at", "id")',
+                 'ACCEPTANCE_ORDER = ("accepted_at", "created_at")  # PLANTED'):
+        after = rendered()
+    assert "in the order `accepted_at`, `created_at`:" in after
+    assert "are ordered by `created_at`" in after
+
+
+@pytest.mark.guarantee("G2")
+def test_the_migrations_own_refusal_sentence_moves_the_document():
+    """The install requirement is read from the migration's RAISE, so the
+    sentence the installer reads is the one the pre-flight raises."""
+    before = rendered()
+    assert "| `MIGRATION_REFUSAL_CASE_FOLD_ASCII_ONLY` | this database's default collation " in (
+        before
+    )
+    assert "That is 2 named refusals in `0001_" in before
+    with planted(
+        "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
+        "RAISE EXCEPTION 'MIGRATION_REFUSAL_CASE_FOLD_ASCII_ONLY: this database''s default "
+        "collation '",
+        "RAISE EXCEPTION 'MIGRATION_REFUSAL_CASE_FOLD_ASCII_ONLY: PLANTED this database''s "
+        "default collation '",
+    ):
+        after = rendered()
+        assert check().returncode == 1
+    assert "| `MIGRATION_REFUSAL_CASE_FOLD_ASCII_ONLY` | PLANTED this database's default " in after

@@ -6,9 +6,13 @@
 
 **EVERY MARKED BLOCK IS DERIVED.** The guarantees come from
 ``tests/_guarantees.py``; the refusal codes and the verification outcomes from
-``findings.py``; the consent channels from the enum that implements them; the
+``findings.py``; the consent channels from the enum that implements them and
+the order acceptances are read in from ``records.ACCEPTANCE_ORDER``; the
 password parameters from ``passwords.SCRYPT``; the command line from the
-parser itself, so a command added without being published is caught. A number
+parser itself, so a command added without being published is caught; and what
+the store REQUIRES of its database from the migration's own pre-flight -- the
+``RAISE EXCEPTION`` sentences of ``0001``, read from the file, so the
+requirement the installer meets is the one the migration enforces. A number
 or a sentence edited by hand turns ``--check`` red.
 
 **AND GENERATION IS NOT VERIFICATION.** Moving a sentence from a document into a
@@ -23,6 +27,7 @@ documentation rather than left looking measured.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -49,9 +54,11 @@ from customer_account.passwords import (  # noqa: E402
     SCRYPT,
 )
 from customer_account.store.postgres import APP_ROLE, TENANT_SETTING  # noqa: E402
+from customer_account.store.records import ACCEPTANCE_ORDER  # noqa: E402
 from customer_account.tokens import TokenState  # noqa: E402
 
 DOC = ROOT / "docs" / "CONTRACT.md"
+MIGRATION = next(iter(sorted((ROOT / "migrations").glob("0001_*.sql"))))
 BEGIN = "<!-- GENERATED:{name} -->"
 END = "<!-- END:{name} -->"
 
@@ -113,7 +120,49 @@ def block_channels() -> str:
         lines.append(f"- `{channel.value}`")
     lines += ["", f"That is {len(Channel)} channels. A third is a migration and a contract "
               "change, not a value somebody types."]
+    order = ", ".join(f"`{column}`" for column in ACCEPTANCE_ORDER)
+    lines += [
+        "",
+        f"Acceptances accumulate and are read oldest first in the order {order}: the row "
+        f"current for a version is the latest by `{ACCEPTANCE_ORDER[0]}`, and two acceptances "
+        f"sharing an instant are ordered by `{ACCEPTANCE_ORDER[-1]}` -- deterministically, the "
+        "same way on every read, but ARBITRARILY: that order means nothing.",
+    ]
     return "\n".join(lines)
+
+
+#: One ``RAISE EXCEPTION`` in the migration: its message, written as one or
+#: more adjacent string literals, followed by its USING clause.
+_RAISE = re.compile(r"RAISE EXCEPTION\s+((?:'(?:[^']|'')*'\s*)+)USING", re.S)
+
+
+def migration_refusals() -> list[tuple[str, str]]:
+    """Every refusal the migration's pre-flight can raise, as (name, sentence),
+    read from the migration file -- so the requirement published here is the
+    one the migration enforces, and one edited without the other is caught."""
+    out = []
+    for literals in _RAISE.findall(MIGRATION.read_text()):
+        parts = re.findall(r"'((?:[^']|'')*)'", literals)
+        message = "".join(parts).replace("''", "'")
+        name, _colon, sentence = message.partition(": ")
+        out.append((name, sentence.strip()))
+    return out
+
+
+def block_install() -> str:
+    rows = ["| the migration refuses, by name | when |", "|---|---|"]
+    for name, sentence in migration_refusals():
+        rows.append(f"| `{name}` | {sentence} |")
+    rows += [
+        "",
+        f"That is {len(rows) - 2} named refusals in `{MIGRATION.name}`'s pre-flight, read from "
+        "the file. Each is raised BEFORE anything is created, inside the migration's own "
+        "transaction, so a refused apply leaves the database as it found it. The requirement "
+        "is an install requirement and not a caveat: `customers.email` carries no collation of "
+        "its own, so the fold that makes one address one account is the database's default "
+        "collation, and the pre-flight judges exactly that.",
+    ]
+    return "\n".join(rows)
 
 
 def block_commands() -> str:
@@ -157,6 +206,7 @@ BLOCKS = {
     "password": block_password,
     "channels": block_channels,
     "commands": block_commands,
+    "install": block_install,
 }
 
 

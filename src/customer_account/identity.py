@@ -15,6 +15,18 @@ mail. Uniqueness is compared WITHOUT REGARD TO CASE: ``Alice@example.com`` and
 ``alice@example.com`` are one customer, because mail is delivered to one
 mailbox and two accounts behind it would make a reset ambiguous. The address is
 stored as given.
+
+**THE FOLD IS THE DATABASE'S, AND NOTHING HERE FOLDS.** "Without regard to
+case" means ``lower(email)`` under the collation ``customers.email`` carries,
+which is the expression the unique index is on and the one every door asks
+(``records._address_holder``). This module once carried a Python ``lower()``
+beside it with a docstring saying the two "must agree byte for byte"; they
+were measured to disagree on 28 code points on CI's own database, 8 on macOS
+and 1,407 under a C locale, plus Python's Final_Sigma rule, and one door
+refused an address as "unchanged" that the next door then gave to a second
+customer. So there is ONE fold, the store's, and the store states what it
+requires of it: migration 0001 refuses to apply, by name, on a database whose
+default collation folds ASCII only.
 """
 
 from __future__ import annotations
@@ -66,17 +78,6 @@ def require_email(value: object, field: str = "email") -> str:
     if at < 1 or at >= len(text) - 1:
         raise Refused(REFUSAL_EMAIL_MALFORMED, field, f"{field} is {text!r}.")
     return text
-
-
-def folded(email: str) -> str:
-    """The form two addresses are compared in. ``lower()`` and not
-    ``casefold()``, because the migration's unique index is on
-    ``lower(email)`` and the two must agree byte for byte: ``casefold`` turns
-    an eszett into ``ss`` and Postgres's ``lower`` does not, and a comparison
-    the database makes differently from the module is a refusal that arrives
-    as a constraint instead of by name. Storage keeps the address as given;
-    only the comparison folds."""
-    return email.lower()
 
 
 def require_aware(value: object, field: str) -> datetime:
