@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openparking-customer-account"
+version = "0.1.0"
+description = "Open Parking AI customer account — is this person who they say they are, and what have they agreed to"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-or-later"
+# Standard library only, and it will stay that way. Everything that decides
+# identity here is a comparison of values: an address against its rule, a
+# password against a stored scrypt hash (`hashlib.scrypt`, in the standard
+# library), a token's digest against a stored one, an instant against an
+# expiry. None of it needs a dependency.
+#
+# The Postgres store is behind a port and its driver is the `store` extra. See
+# src/customer_account/store/__init__.py -- it is imported lazily, inside the
+# function that needs it, so importing this package on a machine with no driver
+# is not an error.
+dependencies = []
+
+[project.optional-dependencies]
+store = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8", "ruff>=0.8", "psycopg[binary]>=3.1"]
+
+[project.scripts]
+customer-account = "customer_account.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+markers = [
+  # A test that proves one of the guarantees docs/CONTRACT.md states. CI fails
+  # when one of these skips without its reason being declared, because a
+  # guarantee whose test can quietly not run is not a guarantee.
+  #
+  # The identifier is not decoration: tests/_guarantees.py holds the canonical
+  # registry, conftest requires every registered id to have RUN, and
+  # docs/CONTRACT.md is generated from the same registry. One source, three
+  # consumers -- so a guarantee cannot be dropped from any of them silently.
+  "guarantee(id): proves a registered guarantee; may not skip silently",
+  # Needs a Postgres to talk to. This is the ONE allowance in the suite, and it
+  # is named here rather than left as a bare skipif: the guarantees it carries
+  # are about the database catalogue and the database's own grants, and there
+  # is no way to read either without a database. CI always provides one, so CI
+  # never skips it.
+  "needs_postgres: requires CUSTOMER_ACCOUNT_TEST_DSN to point at a database",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
