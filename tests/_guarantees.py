@@ -113,7 +113,11 @@ GUARANTEES: dict[str, str] = {
         "that are STATED, never defaulted, and STORED beside every hash; verification "
         "reads the row's parameters, so a row hashed under different parameters still "
         "verifies and raising them invalidates nothing. The comparison is "
-        "constant-time, and the one rule on a password is a stated minimum length."
+        "constant-time, and the one rule on a password is a stated minimum length. "
+        "The KDF a row carries is parsed, not trusted: a credential row carrying a KDF "
+        "this module does not have is refused BY NAME when a password is checked "
+        "against it, through both doors that check one -- never a traceback, never "
+        "an answer."
     ),
     "G13": (
         "Nothing real is in the tree: no card-shaped value, no email address that is "

@@ -71,8 +71,11 @@ def optional_text(value: object, field: str) -> str | None:
 
 
 def require_email(value: object, field: str = "email") -> str:
-    """One ``@`` with something before it and something after it. The same
-    rule as the migration's CHECK, in the same words."""
+    """An ``@`` with something before it and something after it -- judged on
+    the FIRST ``@``, so an address carrying two is accepted, and nothing more
+    is checked (a quoted local part may carry one, and nothing more can be
+    checked without sending mail). The migration's CHECK on ``customers.email``
+    tests the same position of the same character."""
     text = require_text(value, field)
     at = text.find("@")
     if at < 1 or at >= len(text) - 1:

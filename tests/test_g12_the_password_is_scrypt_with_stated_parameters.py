@@ -17,13 +17,30 @@ measured ones (``scripts/measure_scrypt.py``): the row's columns equal
 name; a passphrase of spaces and lowercase letters that clears it is accepted,
 because character classes are not a rule here.
 
+**THE KDF A ROW CARRIES IS PARSED, NOT TRUSTED.** The outside review measured
+that ``verify`` raised a bare ``ValueError`` on a credential whose ``kdf`` was
+not ``scrypt``, and the command line's boundary catches ``Refused`` and the
+driver's errors only -- so with the schema's CHECK dropped by the owner and
+``argon2id`` written onto a live row, ``verify-password`` and a
+password-authorised ``start-email-change`` both reached the shell as a
+traceback, no JSON, exit 1. The tests below do what the schema says nobody
+can -- the OWNER drops the CHECK and writes the KDF -- and require the
+refusal by its name through both doors, the row untouched, nothing written;
+the CHECK is put back before they return. And the over-reach controls, same
+door, CHECK back in place: the correct password still verifies; a wrong one
+is still WRONG_PASSWORD, an ANSWER with exit 1 and not a refusal; no
+credential is still NO_CREDENTIAL.
+
 Controls: verification planted to use the module's constants instead of the
-row's; the minimum length planted away.
+row's; the minimum length planted away; the KDF refusal planted back to the
+bare ``ValueError`` the review measured.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+from contextlib import contextmanager
 
 import pytest
 
@@ -40,7 +57,14 @@ from customer_account.passwords import (
 )
 from customer_account.store.postgres import tenant
 from customer_account.store.records import load_credential, set_password, verify_password
-from store_harness import A_PASSWORD, CREATED_AT, query, seed_customer, store_test
+from store_harness import (
+    A_PASSWORD,
+    ANOTHER_PASSWORD,
+    CREATED_AT,
+    query,
+    seed_customer,
+    store_test,
+)
 
 SMALLER = ScryptParameters(n=2**14, r=8, p=1, dklen=64)
 
@@ -93,11 +117,119 @@ def test_the_minimum_length_is_the_one_rule_and_it_is_in_bytes():
 
 
 @pytest.mark.guarantee("G12")
-def test_a_credential_of_another_kdf_is_not_silently_verified():
+def test_a_credential_of_another_kdf_is_refused_by_name_not_raised():
     credential = Credential(kdf="argon2id", parameters=SMALLER, salt_hex="00" * 16,
                             hash_hex="00" * 64)
-    with pytest.raises(ValueError):
+    with pytest.raises(f.Refused) as refused:
         verify(A_PASSWORD, credential)
+    assert refused.value.code == f.REFUSAL_KDF_UNKNOWN
+    assert refused.value.field == "kdf"
+    assert "argon2id" in refused.value.detail and KDF in refused.value.detail
+
+
+KDF_CHECK = "customer_credentials_kdf_check"
+
+
+@contextmanager
+def _with_the_kdf_check_dropped(owner):
+    """The owner does what the schema says nobody can, and puts it back."""
+    with owner.cursor() as cursor:
+        cursor.execute(f"ALTER TABLE customer_credentials DROP CONSTRAINT {KDF_CHECK}")
+    try:
+        yield
+    finally:
+        with owner.cursor() as cursor:
+            cursor.execute("UPDATE customer_credentials SET kdf = %s WHERE kdf <> %s", (KDF, KDF))
+            cursor.execute(f"ALTER TABLE customer_credentials ADD CONSTRAINT {KDF_CHECK} "
+                           f"CHECK (kdf = '{KDF}')")
+
+
+def _with_credential(app, tenant_id):
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        set_password(cursor, tenant_id, customer_id, A_PASSWORD, by="owner", at=CREATED_AT)
+    app.commit()
+    return customer_id
+
+
+def _door(main, argv, capsys):
+    status = main(argv)
+    out = capsys.readouterr()
+    assert "Traceback" not in out.err and "Traceback" not in out.out, out
+    return status, out
+
+
+VERIFY = ["verify-password"]
+CHANGE = ["start-email-change", "--new-email", "alice.new@example.com", "--valid-minutes", "30",
+          "--at", "2026-01-01T12:01:00+00:00"]
+
+
+@pytest.mark.guarantee("G12")
+@store_test
+@pytest.mark.parametrize("command", [VERIFY, CHANGE], ids=["verify-password", "start-email-change"])
+def test_a_row_carrying_a_kdf_the_module_does_not_have_is_refused_by_name_through_the_door(
+    owner, app, tenant_id, capsys, monkeypatch, command
+):
+    """Both doors that check a password, the row carrying ``argon2id``: exit 3,
+    the JSON, the code, the field -- not a traceback, not an answer -- and
+    nothing written: the credential row untouched, no pending change."""
+    from customer_account.cli import main
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    customer_id = _with_credential(app, tenant_id)
+    monkeypatch.setenv("CUSTOMER_ACCOUNT_PASSWORD", A_PASSWORD)
+    argv = [command[0], "--tenant", str(tenant_id), "--customer", str(customer_id), *command[1:]]
+    with _with_the_kdf_check_dropped(owner):
+        with owner.cursor() as cursor:
+            cursor.execute("UPDATE customer_credentials SET kdf = 'argon2id' "
+                           "WHERE customer_id = %s", (str(customer_id),))
+            assert cursor.rowcount == 1
+        status, out = _door(main, argv, capsys)
+        assert status == 3 and out.err == "", out
+        printed = json.loads(out.out)
+        assert printed["refused"] == f.REFUSAL_KDF_UNKNOWN
+        assert printed["field"] == "kdf"
+        assert "outcome" not in printed, "a refusal, not an answer"
+        assert query(app, tenant_id, "SELECT kdf, changed_at FROM customer_credentials "
+                     "WHERE customer_id = %s", (str(customer_id),)) == [("argon2id", CREATED_AT)]
+        assert query(app, tenant_id, "SELECT count(*) FROM pending_email_changes") == [(0,)]
+
+
+@pytest.mark.guarantee("G12")
+@store_test
+def test_the_kdf_refusal_does_not_reach_a_verified_a_wrong_or_an_absent_credential(
+    owner, app, tenant_id, capsys, monkeypatch
+):
+    """THE OVER-REACH CONTROLS, same door, CHECK in place: the correct password
+    verifies (exit 0); a wrong one is WRONG_PASSWORD -- an ANSWER, exit 1, not
+    a refusal, and that distinction does not move; a customer with no
+    credential is NO_CREDENTIAL, exit 1, unchanged."""
+    from customer_account.cli import main
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    customer_id = _with_credential(app, tenant_id)
+    nobody = seed_customer(app, tenant_id, email="nobody@example.com")
+    T = ["--tenant", str(tenant_id)]
+    monkeypatch.setenv("CUSTOMER_ACCOUNT_PASSWORD", A_PASSWORD)
+    status, out = _door(main, [*VERIFY, *T, "--customer", str(customer_id)], capsys)
+    printed = json.loads(out.out)
+    assert (status, printed["outcome"], printed["verified"]) == (0, f.VERIFIED, True)
+    monkeypatch.setenv("CUSTOMER_ACCOUNT_PASSWORD", ANOTHER_PASSWORD)
+    status, out = _door(main, [*VERIFY, *T, "--customer", str(customer_id)], capsys)
+    printed = json.loads(out.out)
+    assert (status, printed["outcome"], printed["verified"]) == (1, f.WRONG_PASSWORD, False)
+    assert "refused" not in printed, "an answer, not a refusal"
+    assert printed["means"] == f.NOT_VERIFIED_MEANS
+    status, out = _door(main, [*VERIFY, *T, "--customer", str(nobody)], capsys)
+    printed = json.loads(out.out)
+    assert (status, printed["outcome"], printed["verified"]) == (1, f.NO_CREDENTIAL, False)
+    assert "refused" not in printed
+    # and the password-authorised change: a wrong password is still its own refusal
+    status, out = _door(main, [CHANGE[0], *T, "--customer", str(customer_id), *CHANGE[1:]], capsys)
+    assert status == 3 and json.loads(out.out)["refused"] == f.REFUSAL_PASSWORD_WRONG
+    assert query(app, tenant_id, "SELECT kdf FROM customer_credentials") == [(KDF,)]
 
 
 @pytest.mark.guarantee("G12")

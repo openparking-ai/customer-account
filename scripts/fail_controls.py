@@ -435,6 +435,25 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "verification uses the module's constants instead of the row's parameters, so "
         "raising the parameters invalidates every existing credential",
     ),
+    "G12/kdf": (
+        "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
+        "passwords.py",
+        source(
+            "        raise Refused(",
+            '            REFUSAL_KDF_UNKNOWN, "kdf",',
+            '            f"{credential.kdf!r}; the one KDF this module has is {KDF!r}.",',
+            "        )",
+        ),
+        source(
+            "        raise ValueError(  # PLANTED: the bare raise the outside review measured",
+            '            f"a credential with kdf {credential.kdf!r} cannot be verified here"',
+            "        )",
+        ),
+        "a credential row carrying a KDF this module does not have raises a bare "
+        "ValueError again instead of the named refusal, so both doors that check a "
+        "password reach the shell as a traceback with no JSON and exit 1 -- the exit "
+        "verify-password uses for 'not verified'; the door tests require exit 3 by name",
+    ),
     "G12/minimum": (
         "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
         "passwords.py",
