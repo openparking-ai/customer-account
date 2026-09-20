@@ -228,6 +228,16 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "the expiry derivation never fires, so a token issued for thirty minutes "
         "works forever",
     ),
+    "G6/read-state": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "store/records.py",
+        "    state = parse_state(state).value",
+        "    state = state  # PLANTED: the state read is trusted",
+        "the locked read stops parsing the state it finds, so a row carrying 'expired' "
+        "or a state this module does not have falls through to the spend and is refused "
+        "as 'spent by another caller' -- the false sentence the unraisable round measured; "
+        "the tests require the state's own name and an untouched row",
+    ),
     "G6/used": (
         "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
         "store/records.py",

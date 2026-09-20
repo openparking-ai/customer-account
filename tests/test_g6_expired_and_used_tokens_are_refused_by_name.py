@@ -13,12 +13,26 @@ same four hold for both kinds of token, so both are driven.
 'issued'`` and refuses when no row moved -- the backstop for two callers
 racing past the lock.
 
+**THE STATE A DOOR READS IS PARSED, NOT TRUSTED.** The unraisable round
+measured that ``REFUSAL_EXPIRED_IS_DERIVED`` and ``REFUSAL_STATE_UNKNOWN``
+were raised only by ``tokens.parse_state``, which no door called: the
+schema's CHECK was the whole guard, and with the CHECK dropped and
+``expired`` written onto a live row, ``confirm_email_change`` fell through
+to the spend and refused it as "spent by another caller meanwhile" -- a false
+sentence. ``_locked_token`` now parses the state it reads, so a row carrying
+``expired`` is refused by its own name and a row carrying a state this
+module does not have by the other, through both doors, with the row
+untouched. The tests below do what the schema says nobody can -- the OWNER
+drops the CHECK and writes the state -- because that is exactly the case
+the module's own guard is for; the CHECK is put back before they return.
+
 Controls: the expiry derivation planted to never fire; the already-used
-branch planted to answer UNKNOWN.
+branch planted to answer UNKNOWN; the parse of the read state planted away.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -165,6 +179,100 @@ def test_expiry_is_derived_and_expired_cannot_be_typed():
     with pytest.raises(f.Refused) as unknown:
         parse_state("spent")
     assert unknown.value.code == f.REFUSAL_STATE_UNKNOWN
+
+
+#: table -> the auto-named CHECK on ``state`` that 0001 declares inline.
+STATE_CHECK = {
+    "pending_email_changes": "pending_email_changes_state_check",
+    "credential_resets": "credential_resets_state_check",
+}
+TYPED_STATES = "('issued', 'redeemed', 'cancelled')"
+
+
+def _with_the_check_dropped(owner, table):
+    """The owner does what the schema says nobody can, and puts it back."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def dropped():
+        with owner.cursor() as cursor:
+            cursor.execute(f"ALTER TABLE {table} DROP CONSTRAINT {STATE_CHECK[table]}")
+        try:
+            yield
+        finally:
+            with owner.cursor() as cursor:
+                cursor.execute(f"UPDATE {table} SET state = 'issued' WHERE state NOT IN "
+                               f"{TYPED_STATES}")
+                cursor.execute(f"ALTER TABLE {table} ADD CONSTRAINT {STATE_CHECK[table]} "
+                               f"CHECK (state IN {TYPED_STATES})")
+    return dropped()
+
+
+@pytest.mark.guarantee("G6")
+@pytest.mark.parametrize(
+    "typed,code",
+    [("expired", f.REFUSAL_EXPIRED_IS_DERIVED), ("spent", f.REFUSAL_STATE_UNKNOWN)],
+    ids=["a typed expired", "a state the module does not have"],
+)
+@pytest.mark.parametrize("kind,issue,spend", KINDS, ids=KIND_IDS)
+def test_a_row_carrying_a_state_the_module_does_not_have_is_refused_by_name_not_spent(
+    owner, app, tenant_id, typed, code, kind, issue, spend
+):
+    """Both doors, both foreign states: refused by the state's own name, the
+    row untouched -- not read as live (no spend, no redeemed_at) and not read
+    as spent (not ALREADY_USED, the false sentence measured before)."""
+    table = "pending_email_changes" if kind == "email change" else "credential_resets"
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        token = issue(cursor, tenant_id, customer_id)["token"]
+    app.commit()
+    with _with_the_check_dropped(owner, table):
+        with owner.cursor() as cursor:
+            cursor.execute(f"UPDATE {table} SET state = %s WHERE customer_id = %s",
+                           (typed, str(customer_id)))
+            assert cursor.rowcount == 1
+        with tenant(app, tenant_id) as cursor:
+            with pytest.raises(f.Refused) as refused:
+                spend(cursor, tenant_id, token, CREATED_AT + MINUTES)
+        app.rollback()
+        assert refused.value.code == code
+        assert refused.value.field == "state"
+        assert query(app, tenant_id, f"SELECT state, redeemed_at FROM {table} "
+                     "WHERE customer_id = %s", (str(customer_id),)) == [(typed, None)]
+    # THE OVER-REACH CONTROL: the same row put back to issued is spent as before
+    with tenant(app, tenant_id) as cursor:
+        spend(cursor, tenant_id, token, CREATED_AT + MINUTES)
+    app.commit()
+    assert query(app, tenant_id, f"SELECT state FROM {table} WHERE customer_id = %s",
+                 (str(customer_id),)) == [("redeemed",)]
+
+
+@pytest.mark.guarantee("G6")
+def test_the_command_line_refuses_a_typed_expired_state_exit_3(
+    owner, app, tenant_id, capsys, monkeypatch
+):
+    """The door as the operator meets it: exit 3, the JSON, the code."""
+    from customer_account.cli import main
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        token = _reset(cursor, tenant_id, customer_id)["token"]
+    app.commit()
+    monkeypatch.setenv("CUSTOMER_ACCOUNT_PASSWORD", ANOTHER_PASSWORD)
+    with _with_the_check_dropped(owner, "credential_resets"):
+        with owner.cursor() as cursor:
+            cursor.execute("UPDATE credential_resets SET state = 'expired' WHERE customer_id = %s",
+                           (str(customer_id),))
+        status = main(["consume-password-reset", "--tenant", str(tenant_id), "--token", token,
+                       "--at", "2026-01-01T12:01:00+00:00"])
+        out = capsys.readouterr()
+        assert status == 3 and out.err == "", out
+        printed = json.loads(out.out)
+        assert printed["refused"] == f.REFUSAL_EXPIRED_IS_DERIVED
+        assert printed["field"] == "state"
+        assert token not in out.out, "the token is never rendered by a refusal"
 
 
 @pytest.mark.guarantee("G6")

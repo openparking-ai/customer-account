@@ -55,7 +55,9 @@ GUARANTEES: dict[str, str] = {
         "distinctly from an unknown one and from a cancelled one. Expiry is derived "
         "from the stated expires_at against the instant given and is never typed; a "
         "token superseded by a newer one is cancelled with that reason; a spent token "
-        "spends once, and the spend asserts one row."
+        "spends once, and the spend asserts one row. The state a door READS is parsed, "
+        "not trusted: a row carrying 'expired', or any state this module does not have, "
+        "is refused by name when presented -- never read as live, never read as spent."
     ),
     "G7": (
         "Every table this module's migration creates carries a tenant column, ENABLE "

@@ -90,6 +90,7 @@ from customer_account.tokens import (
     expiry,
     is_expired,
     mint,
+    parse_state,
     require_valid_minutes,
 )
 
@@ -627,6 +628,13 @@ def _locked_token(cursor: Any, table: str, tenant_id: UUID, token: str, at: date
     if row is None:  # pragma: no cover - located a moment ago; nothing deletes rows
         raise Refused(REFUSAL_TOKEN_UNKNOWN, "token", "no token of this operator matches.")
     token_id, customer_id, state, redeemed_at, cancelled_at, cancelled_reason, expires_at = row
+    # THE STATE READ IS PARSED, NOT TRUSTED. The schema's CHECK is what stops
+    # anyone typing a state, and a schema is a thing an owner can alter:
+    # measured with the CHECK dropped and 'expired' written onto a live row,
+    # the door below fell through to the spend and refused it as "spent by
+    # another caller meanwhile" -- a false sentence. A state this module
+    # does not have is refused by name here; 'expired' by its own.
+    state = parse_state(state).value
     if state == TokenState.REDEEMED.value:
         raise Refused(REFUSAL_TOKEN_ALREADY_USED, "token", f"used at {redeemed_at.isoformat()}.")
     if state == TokenState.CANCELLED.value:

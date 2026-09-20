@@ -67,7 +67,11 @@ def digest(token: str) -> str:
 
 def parse_state(name: object) -> TokenState:
     """A typed state by name. ``expired`` is refused by its own code, because
-    somebody typing it is the mistake the derivation exists to prevent."""
+    somebody typing it is the mistake the derivation exists to prevent.
+
+    Called by the store on every token row it reads under lock: the schema's
+    CHECK is the first line, and an owner can alter a schema, so what comes
+    back from the database is parsed here rather than trusted."""
     if name == EXPIRED:
         raise Refused(REFUSAL_EXPIRED_IS_DERIVED, "state", "'expired' was typed.")
     try:

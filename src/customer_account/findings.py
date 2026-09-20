@@ -206,11 +206,17 @@ REFUSALS: dict[str, str] = {
         "expires_at. Derived; nobody typed it. Nothing is written; issue a new one."
     ),
     REFUSAL_EXPIRED_IS_DERIVED: (
-        "A token's 'expired' is derived from its expires_at against the instant "
-        "asked about and is never typed by anyone."
+        "A token's 'expired' is derived from its expires_at against the instant asked "
+        "about and is never typed by anyone. A token row found carrying 'expired' as its "
+        "state -- which the schema's CHECK refuses, and an owner can alter a schema -- is "
+        "refused by this name when presented, never read as live and never read as spent. "
+        "Nothing is written."
     ),
     REFUSAL_STATE_UNKNOWN: (
-        "The state named is not one this module has."
+        "A token row found carrying a state this module does not have -- not issued, "
+        "redeemed or cancelled -- is refused by this name when presented. The states are "
+        "published in the contract; a row outside them was written past the schema, and "
+        "the module says so rather than guessing which state it meant. Nothing is written."
     ),
     REFUSAL_INSTANT_MALFORMED: (
         "An instant does not parse as ISO 8601 with an offset, or carries none. A "
