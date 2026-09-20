@@ -18,27 +18,43 @@ pair is carried from the pending row onto the history row when the change
 takes effect, because "who authorised this change" is the question asked
 after a disputed account takeover.
 
+**THE HISTORY IS READ IN ONE STATED ORDER, AND A FULL TIE IS ORDERED BY id.**
+The same tie the gate measured on acceptances: ``changed_at`` is the instant
+the caller stated and ``created_at`` is ``now()``, the transaction's instant,
+so two changes confirmed in one transaction at one stated instant tie on both.
+Measured before this was built: 8 of 8 tied on both clocks and the read came
+back in heap order, stated nowhere. ``records.EMAIL_CHANGE_ORDER`` is the one
+place the order is written, and it ends in ``records.TIEBREAK`` -- the SAME
+tuple ``ACCEPTANCE_ORDER`` ends in, written once -- so a full tie reads the
+same way on every read, arbitrarily, and the contract says so. The tie test
+below confirms eight changes in one transaction so the chance that insertion
+order happens to equal id order is 1 in 40,320.
+
 Controls: the start planted to rewrite the address immediately; the
-neither-given refusal planted away.
+neither-given refusal planted away; the tiebreak column planted away.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import timedelta
+from uuid import UUID
 
 import pytest
 
 from customer_account import findings as f
 from customer_account.store.postgres import tenant
 from customer_account.store.records import (
+    ACCEPTANCE_ORDER,
+    EMAIL_CHANGE_ORDER,
+    TIEBREAK,
     confirm_email_change,
     find_customer_by_email,
     set_password,
     show_account,
     start_email_change,
 )
-from store_harness import A_PASSWORD, CREATED_AT, needs_postgres, query, seed_customer
+from store_harness import A_PASSWORD, CREATED_AT, LATER, needs_postgres, query, seed_customer
 
 pytestmark = needs_postgres
 
@@ -194,3 +210,69 @@ def test_the_command_line_finds_by_the_old_address_until_confirmed(
     capsys.readouterr()
     assert main(["show-account", *T, "--email", NEW]) == 0
     assert json.loads(capsys.readouterr().out)["email"] == NEW
+
+
+def _confirmed_changes(cursor, tenant_id, customer_id, count: int, *, at) -> list[UUID]:
+    """``count`` changes started and confirmed, each to a fresh address, all at
+    ``at``; returns the history row ids in the order they were written."""
+    written = []
+    for n in range(count):
+        started = start_email_change(cursor, tenant_id, customer_id, f"alice{n}@example.com",
+                                     valid_minutes=30, at=at, by=f"front desk {n}")
+        done = confirm_email_change(cursor, tenant_id, started["token"], at=at)
+        written.append(UUID(done["email_change"]))
+    return written
+
+
+@pytest.mark.guarantee("G8")
+def test_changes_sharing_an_instant_tie_on_both_clocks_and_are_read_in_id_order(app, tenant_id):
+    """Eight changes in ONE transaction, all at LATER: changed_at ties by
+    construction and created_at ties because now() is the transaction's
+    instant -- both measured here, not assumed -- and the read comes back in
+    id order, the stated tiebreak."""
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        written = _confirmed_changes(cursor, tenant_id, customer_id, 8, at=LATER)
+        shown = show_account(cursor, tenant_id, customer_id)["email_changes"]
+    app.commit()
+    assert len(shown) == 8 and {row["changed_at"] for row in shown} == {LATER}
+    clocks = query(app, tenant_id, "SELECT count(DISTINCT created_at) FROM customer_email_changes "
+                   "WHERE customer_id = %s", (str(customer_id),))
+    assert clocks == [(1,)], "created_at did not tie, so this measured nothing about the tie"
+    id_of = dict(query(app, tenant_id, "SELECT to_email, id FROM customer_email_changes "
+                       "WHERE customer_id = %s", (str(customer_id),)))
+    read = [UUID(str(id_of[row["to_email"]])) for row in shown]
+    assert sorted(read) == sorted(written), "the read is the eight rows written"
+    assert read == sorted(read), "a full tie is read in id order"
+    assert EMAIL_CHANGE_ORDER == ("changed_at", "created_at", "id")
+    assert EMAIL_CHANGE_ORDER[-len(TIEBREAK):] == TIEBREAK == ACCEPTANCE_ORDER[-len(TIEBREAK):], (
+        "both histories end in the ONE tiebreak")
+
+
+@pytest.mark.guarantee("G8")
+def test_the_tiebreak_changes_nothing_for_changes_that_do_not_tie(app, tenant_id):
+    """THE OVER-REACH CONTROL: on a pair with distinct changed_at the old
+    ordering (changed_at, created_at) and the stated one read identically --
+    the address in effect is still the latest changed_at."""
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        _confirmed_changes(cursor, tenant_id, customer_id, 1, at=CREATED_AT)
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        started = start_email_change(cursor, tenant_id, customer_id, NEW, valid_minutes=30,
+                                     at=LATER, by="front desk, later")
+        confirm_email_change(cursor, tenant_id, started["token"], at=LATER)
+    app.commit()
+    select = "SELECT id FROM customer_email_changes WHERE customer_id = %s ORDER BY "
+    old = query(app, tenant_id, select + "changed_at, created_at", (str(customer_id),))
+    stated = query(app, tenant_id, select + ", ".join(EMAIL_CHANGE_ORDER), (str(customer_id),))
+    assert old == stated and len(stated) == 2
+    with tenant(app, tenant_id) as cursor:
+        shown = show_account(cursor, tenant_id, customer_id)
+    app.rollback()
+    id_of = dict(query(app, tenant_id, "SELECT to_email, id FROM customer_email_changes "
+                       "WHERE customer_id = %s", (str(customer_id),)))
+    assert [str(row[0]) for row in stated] == [str(id_of[h["to_email"]])
+                                              for h in shown["email_changes"]]
+    assert shown["email_changes"][-1]["changed_at"] == LATER, "the row in effect is the latest"
+    assert shown["email"] == NEW == shown["email_changes"][-1]["to_email"]

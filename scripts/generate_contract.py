@@ -7,9 +7,11 @@
 **EVERY MARKED BLOCK IS DERIVED.** The guarantees come from
 ``tests/_guarantees.py``; the refusal codes and the verification outcomes from
 ``findings.py``; the consent channels from the enum that implements them and
-the order acceptances are read in from ``records.ACCEPTANCE_ORDER``; the
-password parameters from ``passwords.SCRYPT``; the command line from the
-parser itself, so a command added without being published is caught; and what
+the orders the two histories are read in from ``records.ACCEPTANCE_ORDER``
+and ``records.EMAIL_CHANGE_ORDER``, both derived from the one
+``records.TIEBREAK``; the password parameters from ``passwords.SCRYPT``; the
+command line from the parser itself, so a command added without being
+published is caught; and what
 the store REQUIRES of its database from the migration's own pre-flight -- the
 ``RAISE EXCEPTION`` sentences of ``0001``, read from the file, so the
 requirement the installer meets is the one the migration enforces. A number
@@ -54,7 +56,11 @@ from customer_account.passwords import (  # noqa: E402
     SCRYPT,
 )
 from customer_account.store.postgres import APP_ROLE, TENANT_SETTING  # noqa: E402
-from customer_account.store.records import ACCEPTANCE_ORDER  # noqa: E402
+from customer_account.store.records import (  # noqa: E402
+    ACCEPTANCE_ORDER,
+    EMAIL_CHANGE_ORDER,
+    TIEBREAK,
+)
 from customer_account.tokens import TokenState  # noqa: E402
 
 DOC = ROOT / "docs" / "CONTRACT.md"
@@ -120,15 +126,29 @@ def block_channels() -> str:
         lines.append(f"- `{channel.value}`")
     lines += ["", f"That is {len(Channel)} channels. A third is a migration and a contract "
               "change, not a value somebody types."]
-    order = ", ".join(f"`{column}`" for column in ACCEPTANCE_ORDER)
-    lines += [
-        "",
-        f"Acceptances accumulate and are read oldest first in the order {order}: the row "
-        f"current for a version is the latest by `{ACCEPTANCE_ORDER[0]}`, and two acceptances "
-        f"sharing an instant are ordered by `{ACCEPTANCE_ORDER[-1]}` -- deterministically, the "
-        "same way on every read, but ARBITRARILY: that order means nothing.",
-    ]
+    lines += ["", order_sentence("Acceptances accumulate and", "acceptances", ACCEPTANCE_ORDER,
+                                 "the row current for a version is the latest")]
     return "\n".join(lines)
+
+
+def order_sentence(subject: str, noun: str, order: tuple[str, ...], rule: str) -> str:
+    """ONE sentence for every history read oldest first: the order it is read
+    in, what its first column means, and that a tie on the instant is broken
+    by the last column -- deterministically, and arbitrarily. Both histories
+    render through here, so the contract says for one exactly what it says
+    for the other, and both orders end in the one ``TIEBREAK``."""
+    assert order[-len(TIEBREAK):] == TIEBREAK, (order, TIEBREAK)
+    columns = ", ".join(f"`{column}`" for column in order)
+    return (
+        f"{subject} are read oldest first in the order {columns}: {rule} by `{order[0]}`, "
+        f"and two {noun} sharing an instant are ordered by `{order[-1]}` -- deterministically, "
+        "the same way on every read, but ARBITRARILY: that order means nothing."
+    )
+
+
+def block_email_history() -> str:
+    return order_sentence("Email changes accumulate and", "changes", EMAIL_CHANGE_ORDER,
+                          "the row for the change now in effect is the latest")
 
 
 #: One ``RAISE EXCEPTION`` in the migration: its message, written as one or
@@ -205,6 +225,7 @@ BLOCKS = {
     "verifications": block_verifications,
     "password": block_password,
     "channels": block_channels,
+    "email_history": block_email_history,
     "commands": block_commands,
     "install": block_install,
 }

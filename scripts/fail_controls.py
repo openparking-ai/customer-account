@@ -325,6 +325,15 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "an email change with neither the password nor a caller's authorisation is "
         "started anyway, with 'unstated' stored as who authorised it",
     ),
+    "G8/tie": (
+        "tests/test_g8_an_email_change_takes_effect_only_when_confirmed.py",
+        "store/records.py",
+        'TIEBREAK = ("created_at", "id")',
+        'TIEBREAK = ("created_at",)  # PLANTED: no tiebreak',
+        "the same plant as G11/tie, on the same line: the email history's order ends in "
+        "the one tuple too, so eight changes confirmed in one transaction come back in "
+        "heap order -- measured before this was built -- and the test requires id order",
+    ),
     "G9": (
         "tests/test_g9_a_reset_goes_to_the_current_address.py",
         "store/records.py",
@@ -382,11 +391,11 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
     "G11/tie": (
         "tests/test_g11_consent_is_one_acceptance_itemised.py",
         "store/records.py",
-        'ACCEPTANCE_ORDER = ("accepted_at", "created_at", "id")',
-        'ACCEPTANCE_ORDER = ("accepted_at", "created_at")  # PLANTED: no tiebreak',
-        "the tiebreak column is dropped from the one stated order, so eight acceptances "
-        "sharing an instant come back in whatever order the heap gives -- the gate measured "
-        "it stable and stated nowhere; the test requires id order",
+        'TIEBREAK = ("created_at", "id")',
+        'TIEBREAK = ("created_at",)  # PLANTED: no tiebreak',
+        "the tiebreak column is dropped from the ONE tuple every history's order ends in, "
+        "so eight acceptances sharing an instant come back in whatever order the heap gives "
+        "-- the gate measured it stable and stated nowhere; the test requires id order",
     ),
     "G12/row-parameters": (
         "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",

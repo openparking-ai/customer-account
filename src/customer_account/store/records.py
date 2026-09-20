@@ -108,17 +108,28 @@ SUPERSEDED = "superseded"
 PENDING_EMAIL_CHANGES = "pending_email_changes"
 CREDENTIAL_RESETS = "credential_resets"
 
-#: The order a customer's acceptances are read in, oldest first, and the ONE
-#: place it is written: ``show_acceptances`` orders by it and the contract
-#: renders it. ``accepted_at`` is the rule (the row current for a version is
-#: the latest); ``created_at`` is the row's own clock, which ties with
-#: ``accepted_at`` for two acceptances written in one transaction (``now()`` is
-#: the transaction's instant); ``id`` is the final tiebreak, unique on every
-#: row. Two acceptances sharing an instant are therefore ordered
+#: THE TIEBREAK, WRITTEN ONCE. Every history this module reads oldest first
+#: ends in these two columns: ``created_at`` is the row's own clock, which
+#: ties with the stated instant for two rows written in one transaction
+#: (``now()`` is the transaction's instant); ``id`` is the final tiebreak,
+#: unique on every row. Two rows sharing an instant are therefore ordered
 #: DETERMINISTICALLY BUT ARBITRARILY -- the same order on every read, and an
-#: order that means nothing. Measured in the gate: without the last column the
-#: order was stable 150/150 and stated nowhere, which is behaviour, not a rule.
-ACCEPTANCE_ORDER = ("accepted_at", "created_at", "id")
+#: order that means nothing. Measured in the gate on acceptances: without the
+#: last column the order was stable 150/150 and stated nowhere, which is
+#: behaviour, not a rule; measured again on the email history in the round
+#: after: both clocks tied 8/8 and the read was heap order. One rule, one
+#: place: each order below is derived from this tuple, never written out.
+TIEBREAK = ("created_at", "id")
+
+#: The order a customer's acceptances are read in, oldest first:
+#: ``show_acceptances`` orders by it and the contract renders it.
+#: ``accepted_at`` is the rule (the row current for a version is the latest).
+ACCEPTANCE_ORDER = ("accepted_at", *TIEBREAK)
+
+#: The order a customer's email history is read in, oldest first:
+#: ``show_account`` orders by it and the contract renders it. ``changed_at``
+#: is the rule (the instant the change took effect, as the caller stated it).
+EMAIL_CHANGE_ORDER = ("changed_at", *TIEBREAK)
 
 
 def as_uuid(value: Any) -> UUID:
@@ -319,7 +330,11 @@ def show_acceptances(cursor: Any, tenant_id: UUID, customer_id: UUID) -> list[di
 def show_account(cursor: Any, tenant_id: UUID, customer_id: UUID) -> dict[str, Any]:
     """The one read of an account. It renders NO hash, NO salt and NO token
     digest: the credential is described by its parameters and when it was
-    set, or by its absence, BY NAME."""
+    set, or by its absence, BY NAME. The email history is oldest first in
+    ``EMAIL_CHANGE_ORDER``, ending in ``id`` so that a full tie still reads
+    the same way twice; the pending list is at most one row through every
+    door (a new change supersedes the old under the customer's lock), so its
+    order has nothing to tie."""
     tenant_id, customer_id = as_uuid(tenant_id), as_uuid(customer_id)
     customer = load_customer(cursor, tenant_id, customer_id)
     credential = _credential_row(cursor, tenant_id, customer_id)
@@ -345,7 +360,7 @@ def show_account(cursor: Any, tenant_id: UUID, customer_id: UUID) -> dict[str, A
     cursor.execute(
         "SELECT from_email, to_email, authorisation, authorised_by, changed_at "
         "FROM customer_email_changes WHERE tenant_id = %s AND customer_id = %s "
-        "ORDER BY changed_at, created_at",
+        f"ORDER BY {', '.join(EMAIL_CHANGE_ORDER)}",
         (str(tenant_id), str(customer_id)),
     )
     history = [

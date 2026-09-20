@@ -70,7 +70,10 @@ GUARANTEES: dict[str, str] = {
         "the old address keeps working until it does. Who authorised the change is "
         "STORED: the customer's current password, verified by this module, or an "
         "explicit caller authorisation -- exactly one, refused by name when neither "
-        "or both is given -- and the authorisation travels onto the history row."
+        "or both is given -- and the authorisation travels onto the history row. The "
+        "history is read in ONE STATED ORDER -- changed_at, created_at, id -- so two "
+        "changes sharing an instant come back the same way on every read, ordered by "
+        "id: deterministically, and ARBITRARILY, and the contract says so."
     ),
     "G9": (
         "A password reset is delivered to the customer's CURRENT address, read from "

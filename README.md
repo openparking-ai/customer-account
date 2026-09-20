@@ -69,7 +69,10 @@ back. Until then the old address is the address. Who authorised the change is
 stored: the customer's current password, verified here, or an explicit caller
 authorisation — exactly one, and it travels onto the history row, because "who
 authorised this change" is the question asked after a disputed account
-takeover.
+takeover. The history is read oldest first in the order `changed_at`,
+`created_at`, `id` — the same tiebreak as the acceptances, written once — so
+two changes sharing an instant read deterministically but **arbitrarily**, and
+the contract says so.
 
 A token is 32 bytes from the CSPRNG, stored as its SHA-256, and printed **once,
 by the call that minted it**. A newer token cancels the older one for the same

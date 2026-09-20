@@ -126,16 +126,21 @@ def test_a_command_added_to_the_parser_moves_the_document_and_a_channel_too():
 
 
 @pytest.mark.guarantee("G2")
-def test_the_acceptance_order_and_its_tiebreak_move_the_document():
+def test_the_one_tiebreak_moves_both_history_sentences():
+    """Both orders derive from ``records.TIEBREAK``: one plant, two sentences
+    move, and neither is a tuple written out a second time."""
     before = rendered()
     assert "in the order `accepted_at`, `created_at`, `id`" in before
-    assert "are ordered by `id`" in before
+    assert "in the order `changed_at`, `created_at`, `id`" in before
+    assert before.count("are ordered by `id`") == 2
     with planted("store/records.py",
-                 'ACCEPTANCE_ORDER = ("accepted_at", "created_at", "id")',
-                 'ACCEPTANCE_ORDER = ("accepted_at", "created_at")  # PLANTED'):
+                 'TIEBREAK = ("created_at", "id")',
+                 'TIEBREAK = ("created_at",)  # PLANTED'):
         after = rendered()
     assert "in the order `accepted_at`, `created_at`:" in after
-    assert "are ordered by `created_at`" in after
+    assert "in the order `changed_at`, `created_at`:" in after
+    assert after.count("are ordered by `created_at`") == 2
+    assert "are ordered by `id`" not in after
 
 
 @pytest.mark.guarantee("G2")
