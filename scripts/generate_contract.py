@@ -5,9 +5,11 @@
     python scripts/generate_contract.py --check    # fail if it would change
 
 **EVERY MARKED BLOCK IS DERIVED.** The guarantees come from
-``tests/_guarantees.py``. The module's own registries -- its refusal codes, its
-named answers, the password parameters it states -- join the blocks here when
-the module lands. A number or a sentence edited by hand turns ``--check`` red.
+``tests/_guarantees.py``; the refusal codes and the verification outcomes from
+``findings.py``; the consent channels from the enum that implements them; the
+password parameters from ``passwords.SCRYPT``; the command line from the
+parser itself, so a command added without being published is caught. A number
+or a sentence edited by hand turns ``--check`` red.
 
 **AND GENERATION IS NOT VERIFICATION.** Moving a sentence from a document into a
 template does not stop it being hand-written -- everywhere except the holes it is
@@ -20,6 +22,7 @@ documentation rather than left looking measured.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -28,6 +31,25 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from _guarantees import GUARANTEES, guarantee_ids  # noqa: E402
+from customer_account.cli import (  # noqa: E402
+    DSN_ENV,
+    EXIT_CONFIGURATION,
+    EXIT_DONE,
+    EXIT_NOT_VERIFIED,
+    EXIT_REFUSED_REQUEST,
+    _parser,
+)
+from customer_account.consent import Channel  # noqa: E402
+from customer_account.findings import NOT_VERIFIED_MEANS, REFUSALS, VERIFICATIONS  # noqa: E402
+from customer_account.passwords import (  # noqa: E402
+    KDF,
+    MIN_PASSWORD_BYTES,
+    PASSWORD_ENV,
+    SALT_BYTES,
+    SCRYPT,
+)
+from customer_account.store.postgres import APP_ROLE, TENANT_SETTING  # noqa: E402
+from customer_account.tokens import TokenState  # noqa: E402
 
 DOC = ROOT / "docs" / "CONTRACT.md"
 BEGIN = "<!-- GENERATED:{name} -->"
@@ -47,8 +69,94 @@ def block_guarantees() -> str:
     return "\n".join(rows)
 
 
+def block_refusals() -> str:
+    rows = ["| code | when, and what to do about it |", "|---|---|"]
+    for code, sentence in sorted(REFUSALS.items()):
+        rows.append(f"| `{code}` | {sentence} |")
+    rows.append("")
+    rows.append(
+        f"That is {len(REFUSALS)} refusals, every one raised somewhere in the package and "
+        "none raised anywhere that is not here (a test reads the raise sites from the AST)."
+    )
+    return "\n".join(rows)
+
+
+def block_verifications() -> str:
+    rows = ["| outcome | what it means |", "|---|---|"]
+    for code, sentence in VERIFICATIONS.items():
+        rows.append(f"| `{code}` | {sentence} |")
+    rows.append("")
+    rows.append(f"Every outcome but the first carries this sentence: *{NOT_VERIFIED_MEANS}*")
+    return "\n".join(rows)
+
+
+def block_password() -> str:
+    return "\n".join([
+        f"- **KDF:** `{KDF}`, from the standard library (`hashlib.scrypt`); no dependency.",
+        f"- **Parameters written today:** n = {SCRYPT.n} (2^{SCRYPT.n.bit_length() - 1}), "
+        f"r = {SCRYPT.r}, p = {SCRYPT.p}, dklen = {SCRYPT.dklen}; salt {SALT_BYTES} bytes "
+        "from the CSPRNG. Measured by `scripts/measure_scrypt.py`, not chosen; stored "
+        "beside every hash, so a row written under other values still verifies and "
+        "raising them invalidates nothing.",
+        f"- **The one rule on a password:** at least {MIN_PASSWORD_BYTES} bytes of UTF-8. "
+        "No character classes, no dictionary.",
+        f"- **Where a password is read from:** the environment variable `{PASSWORD_ENV}`, "
+        "never an argument.",
+        f"- **A token's typed states:** {', '.join('`' + s.value + '`' for s in TokenState)}; "
+        "`expired` is derived from `expires_at` and cannot be typed.",
+    ])
+
+
+def block_channels() -> str:
+    lines = ["One acceptance, itemised. The channels consent may be recorded for, by name:", ""]
+    for channel in Channel:
+        lines.append(f"- `{channel.value}`")
+    lines += ["", f"That is {len(Channel)} channels. A third is a migration and a contract "
+              "change, not a value somebody types."]
+    return "\n".join(lines)
+
+
+def block_commands() -> str:
+    """Derived from argparse itself: every command and every option it takes."""
+    parser = _parser()
+    commands = {
+        name: sub for action in parser._actions
+        if isinstance(action, argparse.__dict__["_SubParsersAction"])
+        for name, sub in action.choices.items()
+    }
+    rows = ["| command | options | what it does |", "|---|---|---|"]
+    for name, sub in commands.items():
+        options = [
+            opt for action in sub._actions for opt in action.option_strings
+            if opt.startswith("--") and opt != "--help"
+        ]
+        help_ = next(
+            (choice.help for action in parser._actions
+             if isinstance(action, argparse.__dict__["_SubParsersAction"])
+             for choice in action._choices_actions if choice.dest == name),
+            "",
+        )
+        rows.append(f"| `{name}` | {' '.join('`' + o + '`' for o in options)} | {help_} |")
+    rows += [
+        "",
+        f"That is {len(commands)} commands, every one against the store (`{DSN_ENV}`), and "
+        "none an HTTP surface. The application connects as the role "
+        f"`{APP_ROLE}` and sets `{TENANT_SETTING}` per transaction.",
+        "",
+        f"Exit status: {EXIT_DONE} done or verified; {EXIT_NOT_VERIFIED} not verified "
+        f"(`verify-password` only); {EXIT_CONFIGURATION} the machine's configuration, one "
+        f"sentence on stderr; {EXIT_REFUSED_REQUEST} the request was refused, as JSON.",
+    ]
+    return "\n".join(rows)
+
+
 BLOCKS = {
     "guarantees": block_guarantees,
+    "refusals": block_refusals,
+    "verifications": block_verifications,
+    "password": block_password,
+    "channels": block_channels,
+    "commands": block_commands,
 }
 
 

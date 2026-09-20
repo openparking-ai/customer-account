@@ -28,6 +28,96 @@ GUARANTEES: dict[str, str] = {
         "contradicts a published sentence changes the sentence, because generation "
         "is not verification."
     ),
+    "G3": (
+        "A plaintext password or token is NEVER STORED and NEVER RENDERED TWICE. A "
+        "password is stored as a scrypt hash with its salt and parameters and is "
+        "returned by nothing; a token is stored as its SHA-256 and returned exactly "
+        "once, by the call that minted it -- not by a read, not by a refusal. The "
+        "scan reads every column of every table in the catalogue, with the digest as "
+        "its positive control."
+    ),
+    "G4": (
+        "NO MONEY-SHAPED, CARD-SHAPED OR CHARGE-SHAPED FIELD EXISTS ANYWHERE IN THE "
+        "MODULE: not a column in the catalogue, not a field on any answer class, not "
+        "a key in the command line's JSON. This module has no view of whether anybody "
+        "is charged and never infers one; the word lists are the instrument and a "
+        "planted fee_cents is caught."
+    ),
+    "G5": (
+        "A customer with no credential row is answered BY NAME -- NO_CREDENTIAL on a "
+        "verification, REFUSAL_NO_CREDENTIAL on a reset or a password-authorised "
+        "change, 'absent' on a read -- never by a crash, never by a silent false, and "
+        "never as 'no password required': every such answer carries the sentence "
+        "saying so."
+    ),
+    "G6": (
+        "An expired token and an already-used token are each refused BY NAME, "
+        "distinctly from an unknown one and from a cancelled one. Expiry is derived "
+        "from the stated expires_at against the instant given and is never typed; a "
+        "token superseded by a newer one is cancelled with that reason; a spent token "
+        "spends once, and the spend asserts one row."
+    ),
+    "G7": (
+        "Every table this module's migration creates carries a tenant column, ENABLE "
+        "and FORCE row-level security and an isolation policy -- read from the "
+        "database catalogue, never from a list of table names -- and every customer "
+        "reference is half of a composite tenant key. A second tenant reads none of "
+        "the first tenant's rows and updates none of them, on every table, and the "
+        "connection is proven able to be stopped before that is believed."
+    ),
+    "G8": (
+        "An email change does not take effect until confirmed at the NEW address, and "
+        "the old address keeps working until it does. Who authorised the change is "
+        "STORED: the customer's current password, verified by this module, or an "
+        "explicit caller authorisation -- exactly one, refused by name when neither "
+        "or both is given -- and the authorisation travels onto the history row."
+    ),
+    "G9": (
+        "A password reset is delivered to the customer's CURRENT address, read from "
+        "the row at issue and never supplied by the caller: the command line has no "
+        "option for it, and a pending, unconfirmed email change does not move it. A "
+        "reset resets a password that exists."
+    ),
+    "G10": (
+        "The email history, the terms acceptances and their channels are APPEND-ONLY "
+        "BY GRANT: the application role holds SELECT and INSERT on them and nothing "
+        "else, holds DELETE on no table in the schema, and the set of append-only "
+        "tables is read from the catalogue and is exactly those three -- with a table "
+        "the role CAN update accepting an update in the same run, as the control that "
+        "the grant check can see a grant."
+    ),
+    "G11": (
+        "Consent is ONE acceptance, itemised: it records the terms version, the text "
+        "shown, who accepted and when, and for each channel consented to the text "
+        "shown for it -- never a boolean. An account is created with its first "
+        "acceptance in the same transaction or not at all; a blank text, an unknown "
+        "channel and a repeated channel are each refused by name."
+    ),
+    "G12": (
+        "A password is hashed with the standard library's scrypt under parameters "
+        "that are STATED, never defaulted, and STORED beside every hash; verification "
+        "reads the row's parameters, so a row hashed under different parameters still "
+        "verifies and raising them invalidates nothing. The comparison is "
+        "constant-time, and the one rule on a password is a stated minimum length."
+    ),
+    "G13": (
+        "Nothing real is in the tree: no card-shaped value, no email address that is "
+        "not obviously invented, and no name from the maintainer's other software, in "
+        "any tracked file, tests and fixtures included -- swept in Python over the file "
+        "set git reports, with each sweep proven to fire on its probe first."
+    ),
+    "G14": (
+        "The command line refuses, never tracebacks: every Refused reaches the "
+        "boundary as {refused, field, detail} with exit 3; a machine that is not set "
+        "up -- no DSN, a database that does not connect -- is one sentence on stderr "
+        "with exit 2; a malformed instant, an unreadable text file and a malformed "
+        "channel pair are each refused by name."
+    ),
+    "G15": (
+        "This module has no HTTP surface and sends nothing: no web framework, no HTTP "
+        "server and no mail or SMS client is imported anywhere in the package, read "
+        "from the AST of every source file -- a planted import goes red."
+    ),
 }
 
 

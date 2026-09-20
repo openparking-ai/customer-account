@@ -99,6 +99,280 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "number, which is the shape that goes stale silently: the document keeps "
         "agreeing with itself while the registry moves underneath it",
     ),
+    "G3/stored": (
+        "tests/test_g3_no_plaintext_is_stored_or_rendered_twice.py",
+        "store/records.py",
+        "    return _write_credential(cursor, tenant_id, customer_id, secret, by=who, at=when)",
+        "    return _write_credential(cursor, tenant_id, customer_id, secret, by=secret, at=when)"
+        "  # PLANTED",
+        "the plaintext password is written into a text column (set_by) beside the "
+        "hash -- the column scan must find it whichever column it lands in",
+    ),
+    "G3/rendered": (
+        "tests/test_g3_no_plaintext_is_stored_or_rendered_twice.py",
+        "store/records.py",
+        source(
+            "    if row is None:",
+            '        raise Refused(REFUSAL_TOKEN_UNKNOWN, "token", "no token of this operator '
+            'matches.")',
+            "    return as_uuid(row[0])",
+        ),
+        source(
+            "    if row is None:",
+            '        raise Refused(REFUSAL_TOKEN_UNKNOWN, "token", f"no token of this operator '
+            'matches {presented}.")  # PLANTED',
+            "    return as_uuid(row[0])",
+        ),
+        "the unknown-token refusal echoes the token presented, so a token typed at "
+        "the wrong tenant is rendered a second time, in a log line",
+    ),
+    "G4/column": (
+        "tests/test_g4_no_money_shaped_field_anywhere.py",
+        "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
+        "  phone        text        CHECK (phone IS NULL OR length(btrim(phone)) > 0),",
+        source(
+            "  phone        text        CHECK (phone IS NULL OR length(btrim(phone)) > 0),",
+            "  fee_cents    integer,  -- PLANTED: a money-shaped column",
+        ),
+        "a money-shaped column is planted into the schema -- the brief's own positive "
+        "control, fee_cents -- and the catalogue read must find it",
+    ),
+    "G4/field": (
+        "tests/test_g4_no_money_shaped_field_anywhere.py",
+        "store/records.py",
+        source(
+            "    sentence: str",
+            "    means: str | None",
+        ),
+        source(
+            "    sentence: str",
+            "    means: str | None",
+            "    balance_cents: int = 0  # PLANTED: a money field on the verification answer",
+        ),
+        "a money field is added to the verification answer; the dataclass walk "
+        "derives the field set from the package, so this is caught the day it is added",
+    ),
+    "G5": (
+        "tests/test_g5_no_credential_is_answered_by_name.py",
+        "store/records.py",
+        "    if credential is None:\n        outcome = NO_CREDENTIAL",
+        "    if credential is None:\n        outcome = WRONG_PASSWORD  # PLANTED",
+        "a customer with no credential is answered WRONG_PASSWORD -- a silent false "
+        "that says a password exists when none does, and loses the sentence that "
+        "this is not 'no password required'",
+    ),
+    "G6/expiry": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "tokens.py",
+        "    return at >= expires_at",
+        "    return False  # PLANTED: nothing ever expires",
+        "the expiry derivation never fires, so a token issued for thirty minutes "
+        "works forever",
+    ),
+    "G6/used": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "store/records.py",
+        source(
+            "    if state == TokenState.REDEEMED.value:",
+            '        raise Refused(REFUSAL_TOKEN_ALREADY_USED, "token", f"used at '
+            '{redeemed_at.isoformat()}.")',
+        ),
+        source(
+            "    if state == TokenState.REDEEMED.value:",
+            '        raise Refused(REFUSAL_TOKEN_UNKNOWN, "token", "no token of this operator '
+            'matches.")  # PLANTED',
+        ),
+        "a token presented twice reads as unknown the second time, so a replay is "
+        "indistinguishable from a typo in the log",
+    ),
+    "G7/force": (
+        "tests/test_g7_rls_from_migration_0001.py",
+        "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
+        "ALTER TABLE customers FORCE  ROW LEVEL SECURITY;",
+        "-- PLANTED: FORCE removed from customers",
+        "one table ships without FORCE ROW LEVEL SECURITY. The coverage check reads "
+        "the catalogue rather than a list of table names, so it finds this without "
+        "anybody adding the table to anything",
+    ),
+    "G7/composite-key": (
+        "tests/test_g7_rls_from_migration_0001.py",
+        "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
+        source(
+            "  UNIQUE (tenant_id, token_sha256),",
+            "  CONSTRAINT credential_resets_customer_in_tenant",
+            "    FOREIGN KEY (tenant_id, customer_id) REFERENCES customers (tenant_id, id) "
+            "ON DELETE CASCADE",
+        ),
+        source(
+            "  UNIQUE (tenant_id, token_sha256),",
+            "  CONSTRAINT credential_resets_customer_in_tenant",
+            "    FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE CASCADE"
+            "  -- PLANTED",
+        ),
+        "one customer reference loses its composite tenant key, so a raw insert as "
+        "tenant A can name tenant B's customer -- the foreign-key check runs past the "
+        "policy",
+    ),
+    "G7/install-step": (
+        "tests/test_g7_rls_from_migration_0001.py",
+        "scripts/ensure-app-role.py",
+        source(
+            '                sql.SQL("ALTER ROLE customer_account_app LOGIN PASSWORD {}").format(',
+            "                    sql.Literal(password)",
+            "                )",
+        ),
+        source(
+            '                "ALTER ROLE customer_account_app LOGIN PASSWORD %s", (password,)'
+            "  # PLANTED",
+        ),
+        "the install step goes back to a bind parameter in a utility statement, which "
+        "PostgreSQL refuses -- the defect a sibling module shipped because nothing ran "
+        "the script",
+    ),
+    "G8/immediate": (
+        "tests/test_g8_an_email_change_takes_effect_only_when_confirmed.py",
+        "store/records.py",
+        source(
+            "    (change_id,) = cursor.fetchone()",
+            "    return {",
+            '        "pending_email_change": str(change_id),',
+        ),
+        source(
+            "    (change_id,) = cursor.fetchone()",
+            '    cursor.execute("UPDATE customers SET email = %s WHERE tenant_id = %s AND id = %s",'
+            "  # PLANTED",
+            "                   (address, str(tenant_id), str(customer_id)))",
+            "    return {",
+            '        "pending_email_change": str(change_id),',
+        ),
+        "the address is rewritten when the change is STARTED, before the new address "
+        "has confirmed anything -- the circular path: a reset would now go to an "
+        "address nobody proved they hold",
+    ),
+    "G8/unauthorised": (
+        "tests/test_g8_an_email_change_takes_effect_only_when_confirmed.py",
+        "store/records.py",
+        source(
+            "    if not has_password and caller is None:",
+            "        raise Refused(",
+            '            REFUSAL_AUTHORISATION_MISSING, "by", "neither a password nor --by was '
+            'given."',
+            "        )",
+        ),
+        source(
+            "    if not has_password and caller is None:",
+            '        caller = "unstated"  # PLANTED: a change nobody authorised goes through',
+        ),
+        "an email change with neither the password nor a caller's authorisation is "
+        "started anyway, with 'unstated' stored as who authorised it",
+    ),
+    "G9": (
+        "tests/test_g9_a_reset_goes_to_the_current_address.py",
+        "store/records.py",
+        '        "deliver_to": customer.email,',
+        source(
+            '        "deliver_to": (cursor.execute(  # PLANTED: deliver to the latest address',
+            '            "SELECT new_email FROM pending_email_changes WHERE tenant_id = %s AND "',
+            '            "customer_id = %s AND state = \'issued\'", (str(tenant_id), '
+            "str(customer_id))) or cursor.fetchone() or (customer.email,))[0],",
+        ),
+        "the reset is delivered to the address of a pending, UNCONFIRMED email change "
+        "-- the plausible defect 'deliver to the latest address', and exactly the "
+        "circular path: whoever started a change to an address they control receives "
+        "the reset there",
+    ),
+    "G10": (
+        "tests/test_g10_histories_are_append_only_by_grant.py",
+        "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
+        source(
+            "GRANT SELECT, INSERT ON",
+            "  customer_email_changes, terms_acceptances, acceptance_channels",
+        ),
+        source(
+            "GRANT SELECT, INSERT, UPDATE ON  -- PLANTED: the histories can be rewritten",
+            "  customer_email_changes, terms_acceptances, acceptance_channels",
+        ),
+        "the grant on the three histories is widened to UPDATE, so an acceptance can "
+        "be rewritten after the fact and 'append-only' is a comment",
+    ),
+    "G11/blank": (
+        "tests/test_g11_consent_is_one_acceptance_itemised.py",
+        "consent.py",
+        "    if not isinstance(value, str) or not value.strip():",
+        "    if not isinstance(value, str):  # PLANTED: a blank text is accepted",
+        "a blank text shown is accepted, so an acceptance can record that nothing was "
+        "shown -- a boolean in disguise",
+    ),
+    "G11/no-acceptance": (
+        "tests/test_g11_consent_is_one_acceptance_itemised.py",
+        "store/records.py",
+        "        accepted = record_acceptance(cursor, tenant_id, customer_id, acceptance)",
+        "        accepted = {}  # PLANTED: the account is created with no acceptance",
+        "the account is created without its acceptance, so a customer exists who "
+        "agreed to nothing",
+    ),
+    "G12/row-parameters": (
+        "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
+        "passwords.py",
+        source(
+            "    parameters = credential.parameters",
+            "    derived = hashlib.scrypt(",
+            '        password.encode("utf-8"), salt=bytes.fromhex(credential.salt_hex), '
+            "n=parameters.n,",
+        ),
+        source(
+            "    parameters = SCRYPT  # PLANTED: the module's constants, not the row's",
+            "    derived = hashlib.scrypt(",
+            '        password.encode("utf-8"), salt=bytes.fromhex(credential.salt_hex), '
+            "n=parameters.n,",
+        ),
+        "verification uses the module's constants instead of the row's parameters, so "
+        "raising the parameters invalidates every existing credential",
+    ),
+    "G12/minimum": (
+        "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
+        "passwords.py",
+        '    if len(value.encode("utf-8")) < MIN_PASSWORD_BYTES:',
+        "    if False:  # PLANTED: no minimum",
+        "the minimum length stops being enforced, so a one-character password is "
+        "hashed and stored",
+    ),
+    "G13/luhn": (
+        "tests/test_g13_nothing_real_in_the_tree.py",
+        "tests/test_g13_nothing_real_in_the_tree.py",
+        "    return total % 10 == 0",
+        "    return False  # PLANTED: nothing is card-shaped",
+        "the card sweep cannot fire on anything",
+    ),
+    "G13/allowlist": (
+        "tests/test_g13_nothing_real_in_the_tree.py",
+        "tests/test_g13_nothing_real_in_the_tree.py",
+        "        if not any(rule.search(address) for rule in _ALLOWED_EMAIL)",
+        "        if False  # PLANTED: every address is allowed",
+        "the email sweep cannot fire on anything",
+    ),
+    "G13/tokens": (
+        "tests/test_g13_nothing_real_in_the_tree.py",
+        "tests/test_g13_nothing_real_in_the_tree.py",
+        "        if is_upper and previous_was_lower and current:",
+        "        if False:  # PLANTED: no split on a case transition",
+        "a name hidden inside an identifier is not found",
+    ),
+    "G14": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "cli.py",
+        "    except Refused as refused:\n        print(json.dumps(_refusal(refused), indent=2))",
+        "    except KeyboardInterrupt as refused:  # PLANTED: a Refused is no longer caught\n"
+        "        print(json.dumps(_refusal(refused), indent=2))",
+        "the boundary stops catching Refused, so every refusal is a traceback and exit 1",
+    ),
+    "G15": (
+        "tests/test_g15_no_http_surface_and_nothing_is_sent.py",
+        "cli.py",
+        "import argparse\nimport dataclasses",
+        "import argparse\nimport dataclasses\nimport smtplib  # PLANTED: a mail client",
+        "a mail client is imported into the command line, and the AST walk must see it",
+    ),
 }
 
 
