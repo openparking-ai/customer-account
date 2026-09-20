@@ -105,6 +105,11 @@ def build_acceptance(
     for name, text in (channels or {}).items():
         channel = parse_channel(name)
         if any(s.channel is channel for s in seen):
+            # Unreachable through any door as the module stands: ``channels``
+            # is a dict, a dict cannot hold a repeated key, and ``Channel``
+            # matches exact values -- so the door (``cli._channels``) refuses
+            # the repeat by this name BEFORE the dict collapses it. Measured
+            # by the re-gate; this guard stays as the type's own statement.
             raise Refused(REFUSAL_CHANNEL_REPEATED, "channel", f"{channel.value} given twice.")
         seen.append(ChannelShown(channel=channel, text_shown=require_shown(
             text, f"channel[{channel.value}]")))

@@ -64,6 +64,7 @@ from uuid import UUID
 
 from customer_account.consent import build_acceptance
 from customer_account.findings import (
+    REFUSAL_CHANNEL_REPEATED,
     REFUSAL_DOCUMENT_UNREADABLE,
     REFUSAL_FIELD_BLANK,
     REFUSAL_INSTANT_MALFORMED,
@@ -113,7 +114,8 @@ def _parser() -> argparse.ArgumentParser:
         s.add_argument("--terms-shown", help="a text file: the terms, in the words shown")
         s.add_argument("--channel", action="append", default=[], metavar="NAME=FILE",
                        help="a channel consented to (email, sms) and a text file with the "
-                            "words shown for it; repeatable")
+                            "words shown for it; repeatable, once per channel -- the same "
+                            "channel twice is refused")
 
     s = store("create-account", "the customer row and its first terms acceptance, together")
     s.add_argument("--email", required=True)
@@ -250,7 +252,17 @@ def _text_file(path: str | None, option: str) -> str | None:
 
 def _channels(pairs: list[str]) -> dict[str, str | None]:
     """``NAME=FILE`` pairs into channel -> text shown. A pair without ``=`` is
-    refused naming the option; an unknown NAME is refused by the module."""
+    refused naming the option; an unknown NAME is refused by the module.
+
+    **A NAME GIVEN TWICE IS REFUSED HERE, BEFORE THE DICT COLLAPSES IT.** The
+    re-gate drove ``--channel sms=A --channel sms=B`` through this door and
+    got exit 0 with B on the row: the dict kept the last, silently, and the
+    consent record then said "this is the text they were shown" about a text
+    that may never have been shown. The check is on the NAME as typed, so
+    ``sms`` twice is the repeat; ``SMS`` beside ``sms`` is not a repeat but an
+    unknown channel, refused by the module under its own name. The second
+    file is never opened: the refusal is judged on the pair, not the text.
+    """
     out: dict[str, str | None] = {}
     for pair in pairs:
         name, sep, path = pair.partition("=")
@@ -258,6 +270,11 @@ def _channels(pairs: list[str]) -> dict[str, str | None]:
             raise Refused(
                 REFUSAL_FIELD_BLANK, "--channel",
                 f"--channel takes NAME=FILE, not {pair!r}.",
+            )
+        if name in out:
+            raise Refused(
+                REFUSAL_CHANNEL_REPEATED, "--channel",
+                f"--channel {name} was given twice; each channel carries one text shown.",
             )
         out[name] = _text_file(path, f"--channel {name}")
     return out

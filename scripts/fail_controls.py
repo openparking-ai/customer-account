@@ -397,6 +397,16 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "so eight acceptances sharing an instant come back in whatever order the heap gives "
         "-- the gate measured it stable and stated nowhere; the test requires id order",
     ),
+    "G11/repeated": (
+        "tests/test_g11_consent_is_one_acceptance_itemised.py",
+        "cli.py",
+        "        if name in out:",
+        "        if False:  # PLANTED: the last --channel of a name wins, silently",
+        "the door stops refusing a repeated channel name, so `--channel sms=A --channel "
+        "sms=B` exits 0 and the consent row records B as the text shown -- the re-gate's "
+        "measured shape, a false sentence in a consent record; the door tests require exit 3 "
+        "by the published name",
+    ),
     "G12/row-parameters": (
         "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
         "passwords.py",

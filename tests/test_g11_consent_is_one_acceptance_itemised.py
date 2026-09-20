@@ -37,13 +37,27 @@ error this project keeps paying for. The tie test below writes eight
 acceptances in one transaction so the chance that insertion order happens to
 equal id order, and the old ordering reads the same by luck, is 1 in 40,320.
 
+**A REPEATED CHANNEL IS REFUSED AT THE DOOR, BEFORE THE DICT COLLAPSES IT.**
+The re-gate measured that the one raise site of ``REFUSAL_CHANNEL_REPEATED``
+sat inside ``build_acceptance``, whose channels arrive as a dict -- and a
+dict cannot hold a repeated key -- so no door could raise it, and
+``create-account --channel sms=A --channel sms=B`` exited 0 with B on the
+row: the LAST one won, silently, stated nowhere. For a record whose whole
+claim is "this is the text they were shown", that is a false sentence.
+``cli._channels`` now refuses the repeated NAME by the published code before
+anything collapses it, and the tests below drive THAT door -- the command
+line, exit 3, JSON -- not the internal raise site. ``SMS`` beside ``sms`` is
+not a repeat: the case is not folded, the enum is the set, and it is refused
+as unknown under its own name.
+
 Controls: the blank-text check planted away; the creation's acceptance
 planted away; the channel's instant planted to a clock of its own; the
-tiebreak column planted away.
+tiebreak column planted away; the door's repeat check planted away.
 """
 
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 import pytest
@@ -181,7 +195,7 @@ def test_an_account_without_an_acceptance_is_refused_by_name_and_nothing_is_writ
 
 
 @pytest.mark.guarantee("G11")
-def test_a_blank_text_an_unknown_channel_and_a_repeated_channel_are_each_refused_by_name():
+def test_a_blank_text_and_an_unknown_channel_are_each_refused_by_name():
     with pytest.raises(f.Refused) as blank:
         build_acceptance(terms_version="v1", terms_shown="   \n", accepted_by="x",
                          accepted_at=CREATED_AT, channels=None)
@@ -195,12 +209,129 @@ def test_a_blank_text_an_unknown_channel_and_a_repeated_channel_are_each_refused
         build_acceptance(terms_version="v1", terms_shown=TERMS_V1, accepted_by="x",
                          accepted_at=CREATED_AT, channels={"fax": "we will fax you"})
     assert unknown.value.code == f.REFUSAL_CHANNEL_UNKNOWN
-    with pytest.raises(f.Refused) as repeated:
+    with pytest.raises(f.Refused) as cased:
         build_acceptance(terms_version="v1", terms_shown=TERMS_V1, accepted_by="x",
                          accepted_at=CREATED_AT, channels={"sms": "a", "SMS": "b"})
-    # 'SMS' is not a channel name; the case is not folded, because the enum is the set
-    assert repeated.value.code == f.REFUSAL_CHANNEL_UNKNOWN
+    # 'SMS' beside 'sms' is NOT a repeat: the case is not folded, the enum is the set,
+    # and it is refused as unknown under its own name
+    assert cased.value.code == f.REFUSAL_CHANNEL_UNKNOWN
     assert [c.value for c in Channel] == ["email", "sms"]
+
+
+def _cli(argv, capsys):
+    from customer_account.cli import main
+
+    status = main(argv)
+    captured = capsys.readouterr()
+    return status, captured.out, captured.err
+
+
+def _create(tenant_id, tmp_path, *tail):
+    terms = tmp_path / "terms.txt"
+    terms.write_text(TERMS_V1)
+    return ["create-account", "--tenant", str(tenant_id), "--by", "self",
+            "--at", "2026-06-01T09:00:00-06:00", "--terms-version", "v1",
+            "--terms-shown", str(terms), *tail]
+
+
+@pytest.mark.guarantee("G11")
+def test_a_repeated_channel_is_refused_by_name_at_the_door_before_the_dict_collapses_it(
+    tmp_path
+):
+    """THE DOOR, not the internal raise site: ``cli._channels`` is what the
+    command line hands its pairs to. The second file does not exist, so had
+    the pair been READ before it was judged, the refusal would have been
+    DOCUMENT_UNREADABLE -- it is the repeat that is refused, on the name."""
+    from customer_account.cli import _channels
+
+    first = tmp_path / "sms_a.txt"
+    first.write_text("first sms text")
+    with pytest.raises(f.Refused) as repeated:
+        _channels([f"sms={first}", "sms=/nowhere/sms_b.txt"])
+    assert repeated.value.code == f.REFUSAL_CHANNEL_REPEATED
+    assert repeated.value.field == "--channel"
+    assert "sms" in repeated.value.detail
+
+
+@pytest.mark.guarantee("G11")
+def test_the_command_line_refuses_a_repeated_channel_exit_3_and_writes_nothing(
+    app, tenant_id, tmp_path, capsys, monkeypatch
+):
+    """The re-gate's own shape, driven again: exit 0 and B on the row before;
+    exit 3, the published code, and NO customer row now."""
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    a, b = tmp_path / "sms_a.txt", tmp_path / "sms_b.txt"
+    a.write_text("first sms text")
+    b.write_text("second sms text")
+    status, out, err = _cli(_create(tenant_id, tmp_path, "--email", "alice@example.com",
+                                    "--channel", f"sms={a}", "--channel", f"sms={b}"), capsys)
+    assert status == 3 and err == "", (out, err)
+    printed = json.loads(out)
+    assert printed["refused"] == f.REFUSAL_CHANNEL_REPEATED
+    assert printed["field"] == "--channel"
+    assert query(app, tenant_id, "SELECT count(*) FROM customers") == [(0,)]
+    assert query(app, tenant_id, "SELECT count(*) FROM acceptance_channels") == [(0,)]
+
+
+@pytest.mark.guarantee("G11")
+def test_one_channel_and_two_different_channels_still_land_with_their_own_texts(
+    app, tenant_id, tmp_path, capsys, monkeypatch
+):
+    """THE OVER-REACH CONTROLS, through the same door: a single channel is
+    unaffected; two DIFFERENT channels both land, each with the text that
+    was shown for IT, read back from the rows."""
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    email, sms = tmp_path / "email.txt", tmp_path / "sms.txt"
+    email.write_text("the email text")
+    sms.write_text("the sms text")
+    status, out, _ = _cli(_create(tenant_id, tmp_path, "--email", "one@example.com",
+                                  "--channel", f"sms={sms}"), capsys)
+    assert status == 0, out
+    one = json.loads(out)["customer"]
+    status, out, _ = _cli(_create(tenant_id, tmp_path, "--email", "two@example.com",
+                                  "--channel", f"email={email}", "--channel", f"sms={sms}"),
+                          capsys)
+    assert status == 0, out
+    two = json.loads(out)["customer"]
+    rows = query(app, tenant_id, (
+        "SELECT a.customer_id::text, c.channel, c.text_shown FROM acceptance_channels c "
+        "JOIN terms_acceptances a ON a.tenant_id = c.tenant_id AND a.id = c.acceptance_id "
+        "ORDER BY a.customer_id::text = %s, c.channel"), (two,))
+    assert rows == [(one, "sms", "the sms text"),
+                    (two, "email", "the email text"), (two, "sms", "the sms text")]
+
+
+@pytest.mark.guarantee("G11")
+@pytest.mark.parametrize(
+    "channel_pair,code,field",
+    [
+        ("fax=FILE", f.REFUSAL_CHANNEL_UNKNOWN, "channel"),
+        ("sms=BLANK", f.REFUSAL_TERMS_TEXT_BLANK, "channel[sms]"),
+    ],
+    ids=["unknown channel", "blank text"],
+)
+def test_the_unknown_channel_and_blank_text_refusals_keep_their_names_at_the_door(
+    app, tenant_id, tmp_path, capsys, monkeypatch, channel_pair, code, field
+):
+    """The two neighbours of the new check, driven through the same door,
+    keep their names and their fields."""
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    text, blank = tmp_path / "text.txt", tmp_path / "blank.txt"
+    text.write_text("a text shown")
+    blank.write_text("   \n")
+    pair = channel_pair.replace("FILE", str(text)).replace("BLANK", str(blank))
+    status, out, _ = _cli(_create(tenant_id, tmp_path, "--email", "x@example.com",
+                                  "--channel", pair), capsys)
+    assert status == 3, out
+    printed = json.loads(out)
+    assert (printed["refused"], printed["field"]) == (code, field), printed
+    assert query(app, tenant_id, "SELECT count(*) FROM customers") == [(0,)]
 
 
 @pytest.mark.guarantee("G11")

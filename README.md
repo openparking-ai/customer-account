@@ -69,10 +69,11 @@ back. Until then the old address is the address. Who authorised the change is
 stored: the customer's current password, verified here, or an explicit caller
 authorisation — exactly one, and it travels onto the history row, because "who
 authorised this change" is the question asked after a disputed account
-takeover. The history is read oldest first in the order `changed_at`,
-`created_at`, `id` — the same tiebreak as the acceptances, written once — so
-two changes sharing an instant read deterministically but **arbitrarily**, and
-the contract says so.
+takeover. The history is read oldest first in **one stated order**, ending in
+the same tiebreak as the acceptances — written once, in code, and generated
+into `docs/CONTRACT.md`, which is where the order is published. Two changes
+sharing an instant read deterministically but **arbitrarily**, and the
+contract says so.
 
 A token is 32 bytes from the CSPRNG, stored as its SHA-256, and printed **once,
 by the call that minted it**. A newer token cancels the older one for the same
@@ -92,11 +93,14 @@ answer after the terms change. Never a boolean. Append-only by grant.
 
 Acceptances **accumulate**: a later acceptance, of a new version or of the
 same one again, is a further row and never a rewrite, and the row current for
-a version is the latest by `accepted_at`. They are read oldest first in the
-order `accepted_at`, `created_at`, `id` — two acceptances written in one
-transaction tie on the first two, and `id` orders them deterministically but
-**arbitrarily**; the contract says so rather than implying an order that does
-not exist. Every channel row carries its own `consented_by` and
+a version is the latest by `accepted_at`. They are read oldest first in **one
+stated order**, published in `docs/CONTRACT.md` from the code that reads them
+— this file does not restate it. Two acceptances written in one transaction
+can share an instant, and the last column of that order breaks the tie
+deterministically but **arbitrarily**; the contract says so rather than
+implying an order that does not exist. A channel may be given once per
+acceptance: the same channel twice is refused by name, never collapsed to the
+last text given. Every channel row carries its own `consented_by` and
 `consented_at`; one written with its acceptance carries the acceptance's own
 instant and name.
 
@@ -113,9 +117,11 @@ fails the run, and a target already failing before anything was planted is
 reported UNMEASURED rather than counted.
 
 The guarantees, the refusal codes, the verification outcomes, the consent
-channels, the password parameters and the command line itself are generated
-into `docs/CONTRACT.md` from the registries and from the parser. No number in
-it is typed.
+channels, the order each history is read in, the password parameters and the
+command line itself are generated into `docs/CONTRACT.md` from the registries
+and from the parser. No number in it is typed. The prose in this file is
+hand-written and points at the contract rather than restating what it
+derives.
 
 ## Install
 
