@@ -91,7 +91,12 @@ GUARANTEES: dict[str, str] = {
         "shown, who accepted and when, and for each channel consented to the text "
         "shown for it -- never a boolean. An account is created with its first "
         "acceptance in the same transaction or not at all; a blank text, an unknown "
-        "channel and a repeated channel are each refused by name."
+        "channel and a repeated channel are each refused by name. Acceptances "
+        "ACCUMULATE: a later acceptance, of a new version or of the same one again, is "
+        "a further row and never a rewrite, and the row current for a version is the "
+        "one with the latest accepted_at. Every channel row carries its own "
+        "consented_by and consented_at, stated and never defaulted; a channel written "
+        "with its acceptance carries the acceptance's own instant and name -- one clock."
     ),
     "G12": (
         "A password is hashed with the standard library's scrypt under parameters "

@@ -77,6 +77,12 @@ the text shown, who and when, and **for each channel consented to, the text
 shown for it** — email, texts — so "what did they agree to for texts" has an
 answer after the terms change. Never a boolean. Append-only by grant.
 
+Acceptances **accumulate**: a later acceptance, of a new version or of the
+same one again, is a further row and never a rewrite, and the row current for
+a version is the latest by `accepted_at`. Every channel row carries its own
+`consented_by` and `consented_at`; one written with its acceptance carries the
+acceptance's own instant and name.
+
 ## Every guarantee has a control that has been proven to fire
 
 ```

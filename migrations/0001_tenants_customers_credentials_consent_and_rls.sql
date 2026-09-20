@@ -329,6 +329,14 @@ CREATE POLICY credential_resets_tenant_isolation ON credential_resets
 --
 -- The first acceptance is written in the same transaction as the customer
 -- row: an account is created with its terms accepted or not at all.
+--
+-- ACCEPTANCES ACCUMULATE. A later acceptance -- of a new version, or of the
+-- same version again -- is a further row, never a rewrite, and there is no
+-- uniqueness on (customer, version) on purpose: the row that is current for
+-- a version is the one with the latest accepted_at. The fix round measured
+-- that no door adds a channel to an existing acceptance, so a second
+-- acceptance is the only way later consent is recorded, and a UNIQUE here
+-- would forbid a real flow.
 -- ---------------------------------------------------------------------------
 CREATE TABLE terms_acceptances (
   id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -357,12 +365,25 @@ CREATE POLICY terms_acceptances_tenant_isolation ON terms_acceptances
 -- acceptance_channels — per acceptance, each channel consented to and the
 -- text shown for it. A channel is a NAME from a fixed set: a new one is a
 -- migration. Append-only, with its parent.
+--
+-- EVERY CHANNEL ROW CARRIES ITS OWN WHO AND WHEN. The application role holds
+-- INSERT here, so a channel can be attached to an acceptance that already
+-- exists (measured in the fix round: there is no door that does it, and a
+-- raw insert as the role is accepted). Nothing here forbids that; this makes
+-- it SELF-DESCRIBING, which is this module's rule for every other record
+-- (accepted_by, issued_by, set_by, authorised_by). A channel written with its
+-- acceptance carries the acceptance's own instant and name -- one clock, and
+-- a test holds the two equal -- so "when did they agree to texts" is answered
+-- by the channel row whichever way it arrived. NOT NULL with NO DEFAULT: the
+-- instant is stated by the writer, never supplied by the database.
 -- ---------------------------------------------------------------------------
 CREATE TABLE acceptance_channels (
-  tenant_id      uuid  NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  acceptance_id  uuid  NOT NULL,
-  channel        text  NOT NULL CHECK (channel IN ('email', 'sms')),
-  text_shown     text  NOT NULL CHECK (length(btrim(text_shown)) > 0),
+  tenant_id      uuid         NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  acceptance_id  uuid         NOT NULL,
+  channel        text         NOT NULL CHECK (channel IN ('email', 'sms')),
+  text_shown     text         NOT NULL CHECK (length(btrim(text_shown)) > 0),
+  consented_by   text         NOT NULL CHECK (length(btrim(consented_by)) > 0),
+  consented_at   timestamptz  NOT NULL,
   PRIMARY KEY (tenant_id, acceptance_id, channel),
   CONSTRAINT acceptance_channels_acceptance_in_tenant
     FOREIGN KEY (tenant_id, acceptance_id)

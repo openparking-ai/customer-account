@@ -250,10 +250,14 @@ def record_acceptance(
     )
     (acceptance_id,) = cursor.fetchone()
     for shown in acceptance.channels:
+        # ONE CLOCK: a channel written with its acceptance carries the
+        # acceptance's own instant and name. A channel row is self-describing
+        # whichever way it arrives, and a test holds these two equal.
         cursor.execute(
-            "INSERT INTO acceptance_channels (tenant_id, acceptance_id, channel, text_shown) "
-            "VALUES (%s, %s, %s, %s)",
-            (str(tenant_id), str(acceptance_id), shown.channel.value, shown.text_shown),
+            "INSERT INTO acceptance_channels (tenant_id, acceptance_id, channel, text_shown, "
+            "consented_by, consented_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (str(tenant_id), str(acceptance_id), shown.channel.value, shown.text_shown,
+             acceptance.accepted_by, acceptance.accepted_at),
         )
     return {
         "acceptance": str(acceptance_id),
@@ -266,7 +270,10 @@ def record_acceptance(
 
 def show_acceptances(cursor: Any, tenant_id: UUID, customer_id: UUID) -> list[dict[str, Any]]:
     """Every acceptance the customer has made, oldest first, the text shown
-    included: this is the read that answers "what did they agree to"."""
+    included: this is the read that answers "what did they agree to".
+    Acceptances ACCUMULATE -- a later one is a further entry, never a
+    rewrite -- so the last entry for a version is the current one; each
+    channel carries its own consented_by and consented_at."""
     tenant_id, customer_id = as_uuid(tenant_id), as_uuid(customer_id)
     load_customer(cursor, tenant_id, customer_id)
     cursor.execute(
@@ -277,11 +284,14 @@ def show_acceptances(cursor: Any, tenant_id: UUID, customer_id: UUID) -> list[di
     out = []
     for aid, version, shown, by, at in cursor.fetchall():
         cursor.execute(
-            "SELECT channel, text_shown FROM acceptance_channels WHERE tenant_id = %s "
-            "AND acceptance_id = %s ORDER BY channel",
+            "SELECT channel, text_shown, consented_by, consented_at FROM acceptance_channels "
+            "WHERE tenant_id = %s AND acceptance_id = %s ORDER BY channel",
             (str(tenant_id), str(aid)),
         )
-        channels = [{"channel": c, "text_shown": t} for c, t in cursor.fetchall()]
+        channels = [
+            {"channel": c, "text_shown": t, "consented_by": b, "consented_at": w}
+            for c, t, b, w in cursor.fetchall()
+        ]
         out.append({"acceptance": str(aid), "terms_version": version, "terms_shown": shown,
                     "accepted_by": by, "accepted_at": at, "channels": channels})
     return out

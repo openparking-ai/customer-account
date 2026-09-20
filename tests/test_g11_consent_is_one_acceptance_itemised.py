@@ -12,8 +12,20 @@ acceptance and after the terms change.
 writes are one transaction; a missing acceptance is refused by name before
 anything is written; and a failure after the customer row leaves no customer.
 
+**ACCEPTANCES ACCUMULATE, AND THE CHANNEL ROW IS SELF-DESCRIBING.** The fix
+round measured that no door adds a channel to an existing acceptance -- the
+one door writes channels for the acceptance it is creating -- so a later
+acceptance is the only way later consent is recorded, and there is no
+uniqueness on (customer, version) on purpose: a second acceptance of the same
+version is a further row, and the current row for a version is the latest by
+``accepted_at``. The same measurement found the application role CAN attach
+a channel to an old acceptance by a raw insert, so every channel row carries
+``consented_by`` and ``consented_at``, NOT NULL with no default; one written
+with its acceptance carries the acceptance's own instant and name, and the
+test below holds the two equal so nobody invents a second clock.
+
 Controls: the blank-text check planted away; the creation's acceptance
-planted away.
+planted away; the channel's instant planted to a clock of its own.
 """
 
 from __future__ import annotations
@@ -55,9 +67,88 @@ def test_the_first_acceptance_is_written_with_the_account_itemised_per_channel(a
     assert only["terms_version"] == "v1" and only["terms_shown"] == TERMS_V1
     assert only["accepted_by"] == "self-registration" and only["accepted_at"] == CREATED_AT
     assert only["channels"] == [
-        {"channel": "email", "text_shown": EMAIL_SHOWN},
-        {"channel": "sms", "text_shown": SMS_SHOWN},
+        {"channel": "email", "text_shown": EMAIL_SHOWN, "consented_by": "self-registration",
+         "consented_at": CREATED_AT},
+        {"channel": "sms", "text_shown": SMS_SHOWN, "consented_by": "self-registration",
+         "consented_at": CREATED_AT},
     ]
+
+
+@pytest.mark.guarantee("G11")
+def test_a_channel_written_with_its_acceptance_carries_the_acceptances_own_clock_and_name(
+    app, tenant_id
+):
+    """ONE CLOCK. Read from the rows, joined, not from the rendered read."""
+    seed_customer(app, tenant_id)
+    rows = query(app, tenant_id, (
+        "SELECT a.accepted_by = c.consented_by, a.accepted_at = c.consented_at, "
+        "a.accepted_at, c.consented_at FROM acceptance_channels c "
+        "JOIN terms_acceptances a ON a.tenant_id = c.tenant_id AND a.id = c.acceptance_id"))
+    assert len(rows) == 2, "the seed writes two channel rows: the denominator"
+    assert all(same_by and same_at for same_by, same_at, _, _ in rows), rows
+    assert {r[3] for r in rows} == {CREATED_AT}
+
+
+@pytest.mark.guarantee("G11")
+def test_a_channel_row_without_its_instant_or_its_name_is_refused_by_the_schema(
+    app, owner, tenant_id
+):
+    """NOT NULL, no default: even the OWNER cannot write an undated channel.
+    The positive control is the same insert with both stated, which lands."""
+    import psycopg
+
+    customer_id = seed_customer(app, tenant_id)
+    (acceptance_id,) = query(app, tenant_id, "SELECT id FROM terms_acceptances")[0]
+    with owner.cursor() as cursor:
+        cursor.execute(
+            "DELETE FROM acceptance_channels WHERE acceptance_id = %s AND channel = 'sms'",
+            (str(acceptance_id),))
+        for columns, values in (
+            ("channel, text_shown", "'sms', 'late text'"),
+            ("channel, text_shown, consented_by", "'sms', 'late text', 'late'"),
+            ("channel, text_shown, consented_at", "'sms', 'late text', now()"),
+        ):
+            with pytest.raises(psycopg.errors.NotNullViolation):
+                cursor.execute(
+                    f"INSERT INTO acceptance_channels (tenant_id, acceptance_id, {columns}) "
+                    f"VALUES (%s, %s, {values})", (str(tenant_id), str(acceptance_id)))
+        cursor.execute(
+            "INSERT INTO acceptance_channels (tenant_id, acceptance_id, channel, text_shown, "
+            "consented_by, consented_at) VALUES (%s, %s, 'sms', 'late text', 'late', %s)",
+            (str(tenant_id), str(acceptance_id), LATER))
+        assert cursor.rowcount == 1, "the control: stated, it lands"
+    with tenant(app, tenant_id) as cursor:
+        recorded = show_acceptances(cursor, tenant_id, customer_id)
+    app.rollback()
+    late = [c for c in recorded[0]["channels"] if c["channel"] == "sms"]
+    assert late == [{"channel": "sms", "text_shown": "late text", "consented_by": "late",
+                     "consented_at": LATER}], "the late channel says when and by whom"
+
+
+@pytest.mark.guarantee("G11")
+def test_a_second_acceptance_of_the_same_version_accumulates_and_the_latest_is_current(
+    app, tenant_id
+):
+    """MEASURED in the fix round, then published: no door adds a channel to an
+    existing acceptance, so this is how later consent is recorded. Two rows,
+    oldest first, the second current; the first stands untouched."""
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        record_acceptance(cursor, tenant_id, customer_id, acceptance(
+            "v1", at=LATER, by="the customer, again",
+            channels=(ChannelShown(Channel.SMS, "Texts, agreed to later."),)))
+        recorded = show_acceptances(cursor, tenant_id, customer_id)
+        summary = show_account(cursor, tenant_id, customer_id)["acceptances"]
+    app.commit()
+    assert [(a["terms_version"], a["accepted_at"]) for a in recorded] == [
+        ("v1", CREATED_AT), ("v1", LATER)]
+    assert recorded[0]["accepted_by"] == "self-registration", "the first row stands"
+    assert recorded[-1]["accepted_by"] == "the customer, again", "the latest is last"
+    assert recorded[-1]["channels"] == [{"channel": "sms", "text_shown": "Texts, agreed to later.",
+                                         "consented_by": "the customer, again",
+                                         "consented_at": LATER}]
+    assert summary == {"count": 2, "latest_accepted_at": LATER}
+    assert query(app, tenant_id, "SELECT count(*) FROM terms_acceptances") == [(2,)]
 
 
 @pytest.mark.guarantee("G11")
@@ -108,8 +199,8 @@ def test_the_migration_refuses_an_unknown_channel_and_a_blank_text_on_a_raw_writ
             with pytest.raises(psycopg.errors.CheckViolation):
                 cursor.execute(
                     "INSERT INTO acceptance_channels (tenant_id, acceptance_id, channel, "
-                    "text_shown) VALUES (%s, %s, %s, %s)",
-                    (str(tenant_id), str(acceptance_id), channel, text),
+                    "text_shown, consented_by, consented_at) VALUES (%s, %s, %s, %s, 'raw', %s)",
+                    (str(tenant_id), str(acceptance_id), channel, text, LATER),
                 )
     assert customer_id is not None
 

@@ -152,6 +152,52 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "a money field is added to the verification answer; the dataclass walk "
         "derives the field set from the package, so this is caught the day it is added",
     ),
+    # The four doors the JSON instrument never drove before the fix round, each
+    # planted alone: the derived instrument must find a key on every one.
+    "G4/json-create-account": (
+        "tests/test_g4_no_money_shaped_field_anywhere.py",
+        "store/records.py",
+        source(
+            '    return {"customer": str(customer_id), "email": address, "external_id": reference,',
+            '            "acceptance": accepted}',
+        ),
+        source(
+            '    return {"customer": str(customer_id), "email": address, "external_id": reference,',
+            '            "acceptance": accepted, "fee_cents": 0}  # PLANTED',
+        ),
+        "a money key on create-account's output -- the door the L3 planted and found the old "
+        "instrument green on",
+    ),
+    "G4/json-record-terms-acceptance": (
+        "tests/test_g4_no_money_shaped_field_anywhere.py",
+        "store/records.py",
+        source(
+            '    return {',
+            '        "acceptance": str(acceptance_id),',
+        ),
+        source(
+            '    return {',
+            '        "acceptance": str(acceptance_id),',
+            '        "tariff": "standard",  # PLANTED: a money-shaped key on the acceptance record',
+        ),
+        "a money-shaped key on record-terms-acceptance's output",
+    ),
+    "G4/json-confirm-email-change": (
+        "tests/test_g4_no_money_shaped_field_anywhere.py",
+        "store/records.py",
+        '        "email_change": str(change_id),',
+        '        "email_change": str(change_id),\n        "balance": 0,  # PLANTED',
+        "a money-shaped key on confirm-email-change's output",
+    ),
+    "G4/json-consume-password-reset": (
+        "tests/test_g4_no_money_shaped_field_anywhere.py",
+        "store/records.py",
+        '    written["credential_reset"] = str(token_id)\n    return written',
+        '    written["credential_reset"] = str(token_id)\n'
+        '    written["amount_minor"] = 0  # PLANTED\n    return written',
+        "a money-shaped key on consume-password-reset's output -- the other door the L3 "
+        "planted and found green",
+    ),
     "G5": (
         "tests/test_g5_no_credential_is_answered_by_name.py",
         "store/records.py",
@@ -310,6 +356,15 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "        accepted = {}  # PLANTED: the account is created with no acceptance",
         "the account is created without its acceptance, so a customer exists who "
         "agreed to nothing",
+    ),
+    "G11/channel-clock": (
+        "tests/test_g11_consent_is_one_acceptance_itemised.py",
+        "store/records.py",
+        "             acceptance.accepted_by, acceptance.accepted_at),",
+        "             acceptance.accepted_by, acceptance.accepted_at.replace(second=59)),"
+        "  # PLANTED: a second clock",
+        "a channel written with its acceptance carries an instant of its own instead of the "
+        "acceptance's -- two clocks for one consent",
     ),
     "G12/row-parameters": (
         "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
