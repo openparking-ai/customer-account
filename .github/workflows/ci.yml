@@ -60,6 +60,24 @@ jobs:
         # quietly depend on a newer interpreter than an integrator's.
         python-version: ['3.11', '3.12']
 
+    services:
+      postgres:
+        # The row-level security guarantee is about the database CATALOGUE, the
+        # append-only histories are GRANTS, and there is no way to read either
+        # without a database. This service is what stops those guarantees'
+        # tests skipping. Host connections to the service are scram, so "the
+        # password works" is measured and not assumed.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: customer_account_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
@@ -93,11 +111,132 @@ jobs:
         # only way a registered guarantee may finish a run unproven, and it is
         # empty here -- so a guarantee whose test did not run and pass fails
         # this step.
+        env:
+          CUSTOMER_ACCOUNT_TEST_DSN: >-
+            host=localhost port=5432 dbname=customer_account_test
+            user=postgres password=postgres
         run: pytest -q
+
+      - name: The database tests really ran, rather than skipping
+        # The step above fails on an unrun GUARANTEE. This is the narrower check
+        # on the same thing: a skipped Postgres test and a passing one both
+        # leave the suite green if the guarantee guard is ever loosened.
+        env:
+          CUSTOMER_ACCOUNT_TEST_DSN: >-
+            host=localhost port=5432 dbname=customer_account_test
+            user=postgres password=postgres
+        run: |
+          set -o pipefail
+          pytest -q -m needs_postgres | tee "$RUNNER_TEMP/db.txt"
+          grep -qE '[0-9]+ passed' "$RUNNER_TEMP/db.txt"
+          if grep -q 'skipped' "$RUNNER_TEMP/db.txt"; then
+            echo "a database test skipped, so the isolation guarantee is unproven:"
+            cat "$RUNNER_TEMP/db.txt"; exit 1
+          fi
+
+      - name: The command line works with nothing but this package and a database
+        # The definition of done for a standalone module, as a check: someone
+        # with no parking system migrates a database, points the command line
+        # at it and gets an answer. EVERY exit status is asserted, and the
+        # non-zero ones are the ones that matter: a check that only ever runs
+        # the happy path cannot tell a working refusal from one that reports
+        # nothing. The migration and the install step are the README's own two
+        # steps, run as published; the tenant row is seeded as the owner, as
+        # the README says it is.
+        env:
+          OWNER_DSN: host=localhost port=5432 dbname=customer_account_test user=postgres password=postgres
+          CUSTOMER_ACCOUNT_APP_PASSWORD: app-password-for-this-run
+        run: |
+          set -o pipefail
+          python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["OWNER_DSN"], autocommit=True) as c:
+              c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+              c.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+              c.execute(open("migrations/0001_tenants_customers_credentials_consent_and_rls.sql").read())
+              c.execute("INSERT INTO tenants (id, slug, name) VALUES "
+                        "('00000000-0000-0000-0000-000000000001', 'ci', 'ci')")
+          PY
+          python scripts/ensure-app-role.py "$OWNER_DSN"
+          export CUSTOMER_ACCOUNT_DSN="host=localhost port=5432 dbname=customer_account_test user=customer_account_app password=$CUSTOMER_ACCOUNT_APP_PASSWORD"
+          T="--tenant 00000000-0000-0000-0000-000000000001"
+          AT="--at 2026-06-01T09:00:00-06:00"
+          echo "Version 1 of the terms." > "$RUNNER_TEMP/terms.txt"
+          echo "We will text you." > "$RUNNER_TEMP/sms.txt"
+
+          # An account with its acceptance: exit 0, and the customer's id comes back.
+          customer-account create-account $T --email holder@example.com --by self $AT \
+            --terms-version v1 --terms-shown "$RUNNER_TEMP/terms.txt" \
+            --channel "sms=$RUNNER_TEMP/sms.txt" | tee "$RUNNER_TEMP/created.txt"
+          CID=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['customer'])" "$RUNNER_TEMP/created.txt")
+
+          # The same address again is refused by name: exit 3.
+          if customer-account create-account $T --email HOLDER@example.com --by self $AT \
+               --terms-version v1 --terms-shown "$RUNNER_TEMP/terms.txt" | tee "$RUNNER_TEMP/taken.txt"; then
+            echo "a second account behind one address was created"; exit 1
+          fi
+          grep -q '"REFUSAL_EMAIL_TAKEN"' "$RUNNER_TEMP/taken.txt"
+
+          # No credential yet: verify answers NO_CREDENTIAL by name, exit 1 -- and
+          # it is NOT exit 0. This is the positive control for the line below.
+          export CUSTOMER_ACCOUNT_PASSWORD="correct horse battery"
+          if customer-account verify-password $T --customer "$CID" | tee "$RUNNER_TEMP/none.txt"; then
+            echo "a customer with no credential verified"; exit 1
+          fi
+          grep -q '"NO_CREDENTIAL"' "$RUNNER_TEMP/none.txt"
+          grep -q "no password required" "$RUNNER_TEMP/none.txt"
+
+          # Set it, verify it: exit 0. A wrong one: exit 1, by name.
+          customer-account set-password $T --customer "$CID" --by ops $AT > /dev/null
+          customer-account verify-password $T --customer "$CID" | grep -q '"VERIFIED"'
+          CUSTOMER_ACCOUNT_PASSWORD="not the one, surely" customer-account verify-password $T --customer "$CID" \
+            > "$RUNNER_TEMP/wrong.txt" && { echo "a wrong password verified"; exit 1; }
+          test $? -eq 1 || { echo "expected exit 1"; cat "$RUNNER_TEMP/wrong.txt"; exit 1; }
+          grep -q '"WRONG_PASSWORD"' "$RUNNER_TEMP/wrong.txt"
+
+          # A reset goes to the CURRENT address, and the token is printed once.
+          customer-account start-password-reset $T --customer "$CID" --valid-minutes 30 --by ops $AT \
+            | tee "$RUNNER_TEMP/reset.txt"
+          grep -q '"deliver_to": "holder@example.com"' "$RUNNER_TEMP/reset.txt"
+          TOKEN=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['token'])" "$RUNNER_TEMP/reset.txt")
+          CUSTOMER_ACCOUNT_PASSWORD="a brand new passphrase" customer-account consume-password-reset \
+            $T --token "$TOKEN" --at 2026-06-01T09:10:00-06:00 | grep -q '"replaced"'
+          if customer-account consume-password-reset $T --token "$TOKEN" --at 2026-06-01T09:11:00-06:00 \
+               | tee "$RUNNER_TEMP/used.txt"; then
+            echo "a token was spent twice"; exit 1
+          fi
+          grep -q '"REFUSAL_TOKEN_ALREADY_USED"' "$RUNNER_TEMP/used.txt"
+
+          # No DSN: one sentence on stderr, exit 2, nothing on stdout.
+          unset CUSTOMER_ACCOUNT_DSN
+          customer-account show-account $T --customer "$CID" > "$RUNNER_TEMP/out.txt" 2> "$RUNNER_TEMP/err.txt" && {
+            echo "a command ran with no DSN"; exit 1; }
+          test $? -eq 2 || { echo "expected exit 2"; cat "$RUNNER_TEMP/err.txt"; exit 1; }
+          test ! -s "$RUNNER_TEMP/out.txt"
+          grep -q "CUSTOMER_ACCOUNT_DSN is not set" "$RUNNER_TEMP/err.txt"
+
+          echo "the module answered, and refused, for the right reasons"
 
   controls:
     name: controls
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Several controls plant into the migration, so they need the same
+        # database the suite does. Without it those targets all SKIP, the
+        # control cannot fire, and fail_controls.py reports it DEAD and exits 1.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: customer_account_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
@@ -117,6 +256,10 @@ jobs:
         # Breaks the thing each guarantee guards and requires red. No count is
         # written here on purpose: the script derives the set from
         # tests/_guarantees.py and refuses to run if a guarantee has no control.
+        env:
+          CUSTOMER_ACCOUNT_TEST_DSN: >-
+            host=localhost port=5432 dbname=customer_account_test
+            user=postgres password=postgres
         run: python scripts/fail_controls.py
 
       - name: The working tree is unchanged after every defect was planted
