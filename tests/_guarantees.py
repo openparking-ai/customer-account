@@ -73,9 +73,10 @@ GUARANTEES: dict[str, str] = {
         "STORED: the customer's current password, verified by this module, or an "
         "explicit caller authorisation -- exactly one, refused by name when neither "
         "or both is given -- and the authorisation travels onto the history row. The "
-        "history is read in ONE STATED ORDER -- changed_at, created_at, id -- so two "
-        "changes sharing an instant come back the same way on every read, ordered by "
-        "id: deterministically, and ARBITRARILY, and the contract says so."
+        "history is read in ONE STATED ORDER -- published in this contract from the "
+        "code that reads it, never written out here -- so two changes sharing an "
+        "instant come back the same way on every read, ordered by the last column of "
+        "that order: deterministically, and ARBITRARILY, and the contract says so."
     ),
     "G9": (
         "A password reset is delivered to the customer's CURRENT address, read from "
@@ -100,11 +101,12 @@ GUARANTEES: dict[str, str] = {
         "ACCUMULATE: a later acceptance, of a new version or of the same one again, is "
         "a further row and never a rewrite, and the row current for a version is the "
         "one with the latest accepted_at. They are read in ONE STATED ORDER -- "
-        "accepted_at, created_at, id -- so two acceptances sharing an instant come back "
-        "the same way on every read, ordered by id: deterministically, and ARBITRARILY, "
-        "and the contract says so. Every channel row carries its own consented_by and "
-        "consented_at, stated and never defaulted; a channel written with its acceptance "
-        "carries the acceptance's own instant and name -- one clock."
+        "published in this contract from the code that reads them, never written out "
+        "here -- so two acceptances sharing an instant come back the same way on every "
+        "read, ordered by the last column of that order: deterministically, and "
+        "ARBITRARILY, and the contract says so. Every channel row carries its own "
+        "consented_by and consented_at, stated and never defaulted; a channel written "
+        "with its acceptance carries the acceptance's own instant and name -- one clock."
     ),
     "G12": (
         "A password is hashed with the standard library's scrypt under parameters "
