@@ -7,11 +7,12 @@ password" both possible at once: a reset goes to the current address, and a
 change is confirmed at the new one. An account keyed on the email is orphaned
 the first time it changes.
 
-**THE ADDRESS RULE IS COPIED, NOT INVENTED.** One ``@`` with text on both sides
--- the rule the sibling pass module ships for a holder's address, and the same
-CHECK the migration carries so a raw write cannot store what the module refuses.
-Nothing more is checked, because nothing more can be checked without sending
-mail. Uniqueness is compared WITHOUT REGARD TO CASE: ``Alice@example.com`` and
+**THE ADDRESS RULE IS COPIED, NOT INVENTED.** An ``@`` with text on both sides,
+judged on the FIRST ``@`` -- an address carrying two is accepted -- the rule the
+sibling pass module ships for a holder's address, and the same CHECK the
+migration carries so a raw write cannot store what the module refuses. Nothing
+more is checked, because nothing more can be checked without sending mail.
+Uniqueness is compared WITHOUT REGARD TO CASE: ``Alice@example.com`` and
 ``alice@example.com`` are one customer, because mail is delivered to one
 mailbox and two accounts behind it would make a reset ambiguous. The address is
 stored as given.
