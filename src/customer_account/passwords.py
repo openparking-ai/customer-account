@@ -37,6 +37,7 @@ import secrets
 from dataclasses import dataclass
 
 from customer_account.findings import (
+    REFUSAL_KDF_UNKNOWN,
     REFUSAL_PASSWORD_NOT_GIVEN,
     REFUSAL_PASSWORD_TOO_SHORT,
     Refused,
@@ -119,9 +120,22 @@ def hash_password(password: str, parameters: ScryptParameters = SCRYPT) -> Crede
 
 def verify(password: str, credential: Credential) -> bool:
     """Does ``password`` produce ``credential``'s hash under THE ROW'S
-    parameters? Constant-time comparison."""
+    parameters? Constant-time comparison.
+
+    **THE ROW'S KDF IS PARSED, NOT TRUSTED.** The schema's CHECK is what stops
+    anyone writing a credential this module did not make, and a schema is a
+    thing an owner can alter: measured with the CHECK dropped and ``argon2id``
+    written onto a live row, both doors that check a password reached the
+    shell as a Python traceback with no JSON and exit 1 -- which is also
+    ``verify-password``'s "not verified" status, so a caller reading the exit
+    alone would have read a crash as a wrong password. A KDF this module does
+    not have is refused by name here, the same shape as ``tokens.parse_state``
+    for a token's state; the password is never compared."""
     if credential.kdf != KDF:
-        raise ValueError(f"a credential with kdf {credential.kdf!r} cannot be verified here")
+        raise Refused(
+            REFUSAL_KDF_UNKNOWN, "kdf",
+            f"{credential.kdf!r}; the one KDF this module has is {KDF!r}.",
+        )
     parameters = credential.parameters
     derived = hashlib.scrypt(
         password.encode("utf-8"), salt=bytes.fromhex(credential.salt_hex), n=parameters.n,

@@ -76,6 +76,7 @@ REFUSAL_TOKEN_CANCELLED = "REFUSAL_TOKEN_CANCELLED"
 REFUSAL_TOKEN_EXPIRED = "REFUSAL_TOKEN_EXPIRED"
 REFUSAL_EXPIRED_IS_DERIVED = "REFUSAL_EXPIRED_IS_DERIVED"
 REFUSAL_STATE_UNKNOWN = "REFUSAL_STATE_UNKNOWN"
+REFUSAL_KDF_UNKNOWN = "REFUSAL_KDF_UNKNOWN"
 REFUSAL_INSTANT_MALFORMED = "REFUSAL_INSTANT_MALFORMED"
 REFUSAL_DOCUMENT_UNREADABLE = "REFUSAL_DOCUMENT_UNREADABLE"
 REFUSAL_CONSTRAINT = "REFUSAL_CONSTRAINT"
@@ -217,6 +218,15 @@ REFUSALS: dict[str, str] = {
         "redeemed or cancelled -- is refused by this name when presented. The states are "
         "published in the contract; a row outside them was written past the schema, and "
         "the module says so rather than guessing which state it meant. Nothing is written."
+    ),
+    REFUSAL_KDF_UNKNOWN: (
+        "A credential row found carrying a KDF this module does not have -- anything but "
+        "scrypt -- is refused by this name when a password is checked against it: through "
+        "verify-password, and through an email change authorised by the current password. "
+        "The schema's CHECK refuses the write, and an owner can alter a schema; a row outside "
+        "it was written past the schema, and the module says so rather than guessing how the "
+        "hash was made. The password is never compared, so this is a refusal and not "
+        "WRONG_PASSWORD. Nothing is written."
     ),
     REFUSAL_INSTANT_MALFORMED: (
         "An instant does not parse as ISO 8601 with an offset, or carries none. A "

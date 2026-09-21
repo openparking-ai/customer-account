@@ -7,11 +7,12 @@ password" both possible at once: a reset goes to the current address, and a
 change is confirmed at the new one. An account keyed on the email is orphaned
 the first time it changes.
 
-**THE ADDRESS RULE IS COPIED, NOT INVENTED.** One ``@`` with text on both sides
--- the rule the sibling pass module ships for a holder's address, and the same
-CHECK the migration carries so a raw write cannot store what the module refuses.
-Nothing more is checked, because nothing more can be checked without sending
-mail. Uniqueness is compared WITHOUT REGARD TO CASE: ``Alice@example.com`` and
+**THE ADDRESS RULE IS COPIED, NOT INVENTED.** An ``@`` with text on both sides,
+judged on the FIRST ``@`` -- an address carrying two is accepted -- the rule the
+sibling pass module ships for a holder's address, and the same CHECK the
+migration carries so a raw write cannot store what the module refuses. Nothing
+more is checked, because nothing more can be checked without sending mail.
+Uniqueness is compared WITHOUT REGARD TO CASE: ``Alice@example.com`` and
 ``alice@example.com`` are one customer, because mail is delivered to one
 mailbox and two accounts behind it would make a reset ambiguous. The address is
 stored as given.
@@ -71,8 +72,11 @@ def optional_text(value: object, field: str) -> str | None:
 
 
 def require_email(value: object, field: str = "email") -> str:
-    """One ``@`` with something before it and something after it. The same
-    rule as the migration's CHECK, in the same words."""
+    """An ``@`` with something before it and something after it -- judged on
+    the FIRST ``@``, so an address carrying two is accepted, and nothing more
+    is checked (a quoted local part may carry one, and nothing more can be
+    checked without sending mail). The migration's CHECK on ``customers.email``
+    tests the same position of the same character."""
     text = require_text(value, field)
     at = text.find("@")
     if at < 1 or at >= len(text) - 1:

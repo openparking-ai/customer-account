@@ -134,10 +134,11 @@ CREATE POLICY tenants_self_only ON tenants
 -- id is what every other row points at, so a change orphans nothing.
 --
 -- `email` carries the SAME check the sibling pass module's holder address
--- carries, copied: one @ with text on both sides. Uniqueness is on the
--- CASE-FOLDED address -- `Alice@` and `alice@` are one mailbox, and two
--- accounts behind one mailbox would make a password reset ambiguous. The
--- address is stored as given. THE FOLD IS lower(email) UNDER THIS COLUMN'S
+-- carries, copied: an @ with text on both sides, judged on the FIRST @ --
+-- an address carrying two is accepted, and nothing more is checked.
+-- Uniqueness is on the CASE-FOLDED address -- `Alice@` and `alice@` are one
+-- mailbox, and two accounts behind one mailbox would make a password reset
+-- ambiguous. The address is stored as given. THE FOLD IS lower(email) UNDER THIS COLUMN'S
 -- COLLATION, which is the database's default (no COLLATE clause here, on
 -- purpose: the pre-flight above judges the database's default, and a clause
 -- here would take the column out from under it). The module folds nothing in
