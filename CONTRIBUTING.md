@@ -64,6 +64,11 @@ when confirmed at the NEW address, and who authorised it is stored.
 module is standalone by definition. It sends no email and no SMS; delivering a
 token is the caller's.
 
+**A name from outside this project.** No product, module or hostname from the
+maintainer's other, private software appears here — not in code, a comment, a
+document, a test, a fixture, a file's path or a commit message.
+`.github/scripts/check-no-sibling-names.js` enforces it in CI.
+
 **A test that has never been seen to fail.** If you add a guarantee, register it
 in `tests/_guarantees.py` and add a control to `scripts/fail_controls.py` that
 breaks the thing it guards and requires red. The suite refuses to finish with a
