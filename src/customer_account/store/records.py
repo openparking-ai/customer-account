@@ -26,11 +26,21 @@ reason ``superseded`` and the issuer as ``cancelled_by``: the newest token is
 the one that works, and an older one presented afterwards is refused as
 cancelled, by name.
 
+**EACH RECOVERY PATH CLOSES THE OTHER.** A new password -- ``set_password``,
+or a consumed reset -- cancels the customer's issued email changes, with the
+reason ``password_set``: a change started by someone holding the old password
+must not survive the customer replacing it. A confirmed email change cancels
+the customer's issued resets, with the reason ``email_changed``: a reset was
+delivered to the address that has just stopped being the address. Both run
+under the customer's lock, like every other write here.
+
 **THE ORDER OF THE REFUSALS IS PART OF THE CONTRACT**, and every one writes
 nothing: the token (unknown; then, under the locks, already used; cancelled;
-expired -- derived from ``expires_at`` against the instant given); then what
-the spend would write (an address another customer took meanwhile). The first
-thing that fails is the refusal; nothing after it is evaluated.
+expired -- derived from ``expires_at`` against the instant given; an instant
+before the token was issued); then what the spend would write (for an email
+change, an instant before the change now in effect; an address another
+customer took meanwhile). The first thing that fails is the refusal; nothing
+after it is evaluated.
 
 **NO EMAIL IS SENT.** This module has no network and no third-party service:
 it mints a token, records that it was issued, and names the address it is FOR
@@ -56,6 +66,8 @@ from customer_account.findings import (
     REFUSAL_EMAIL_TAKEN,
     REFUSAL_EMAIL_UNCHANGED,
     REFUSAL_EXTERNAL_ID_TAKEN,
+    REFUSAL_INSTANT_BEFORE_ISSUE,
+    REFUSAL_INSTANT_BEFORE_LATEST_CHANGE,
     REFUSAL_NO_CREDENTIAL,
     REFUSAL_PASSWORD_WRONG,
     REFUSAL_TENANT_NOT_FOUND,
@@ -100,11 +112,18 @@ BY_CALLER = "caller"
 
 #: One order, everywhere a write takes two locks: the customer row, then the
 #: token row. Two orders would be an ABBA deadlock waiting for its first
-#: concurrent day.
+#: concurrent day. A write that also cancels the OTHER kind's tokens (a new
+#: password, a confirmed change) does so while it holds the customer row, so
+#: no two writers ever reach token rows of one customer at once.
 LOCK_ORDER = ("customers", "pending_email_changes | credential_resets")
 
 #: Why an older token was cancelled when a newer one was issued.
 SUPERSEDED = "superseded"
+#: Why an email change was cancelled: the customer's password was set anew.
+PASSWORD_SET = "password_set"
+#: Why a reset was cancelled: the address it was delivered to stopped being
+#: the customer's address.
+EMAIL_CHANGED = "email_changed"
 
 PENDING_EMAIL_CHANGES = "pending_email_changes"
 CREDENTIAL_RESETS = "credential_resets"
@@ -453,12 +472,16 @@ def set_password(
     cursor: Any, tenant_id: UUID, customer_id: UUID, password: object, *, by: object, at: object
 ) -> dict[str, Any]:
     """The caller says a credential exists now. ``by`` is stored: who decided
-    a password should exist is a fact this module records and never infers."""
+    a password should exist is a fact this module records and never infers.
+    A new password cancels the customer's issued email changes (``PASSWORD_SET``):
+    one started with the old password must not outlive it."""
     tenant_id, customer_id = as_uuid(tenant_id), as_uuid(customer_id)
     who = require_text(by, "by")
     when = require_aware(at, "at")
     secret = require_password(password)
     load_customer(cursor, tenant_id, customer_id, lock=True)
+    _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id, by=who, at=when,
+               reason=PASSWORD_SET)
     return _write_credential(cursor, tenant_id, customer_id, secret, by=who, at=when)
 
 
@@ -516,13 +539,16 @@ def _require_password_verified(
 
 
 def _supersede(
-    cursor: Any, table: str, tenant_id: UUID, customer_id: UUID, *, by: str, at: datetime
+    cursor: Any, table: str, tenant_id: UUID, customer_id: UUID, *, by: str, at: datetime,
+    reason: str = SUPERSEDED,
 ) -> int:
-    """Cancel the customer's outstanding issued tokens of one kind."""
+    """Cancel the customer's outstanding issued tokens of one kind, with the
+    reason given: ``SUPERSEDED`` by a newer one of the same kind, or the other
+    recovery path's own reason."""
     cursor.execute(
         f"UPDATE {table} SET state = 'cancelled', cancelled_by = %s, cancelled_at = %s, "
         "cancelled_reason = %s WHERE tenant_id = %s AND customer_id = %s AND state = 'issued'",
-        (by, at, SUPERSEDED, str(tenant_id), str(customer_id)),
+        (by, at, reason, str(tenant_id), str(customer_id)),
     )
     return cursor.rowcount
 
@@ -618,16 +644,19 @@ def _locate_token(cursor: Any, table: str, tenant_id: UUID, token: object) -> UU
 
 def _locked_token(cursor: Any, table: str, tenant_id: UUID, token: str, at: datetime) -> tuple:
     """The token row, locked and re-read under the customer lock, and judged:
-    already used, cancelled, expired -- each by name, in that order."""
+    already used, cancelled, expired, presented before it was issued -- each
+    by name, in that order."""
     cursor.execute(
         f"SELECT id, customer_id, state, redeemed_at, cancelled_at, cancelled_reason, "
-        f"expires_at FROM {table} WHERE tenant_id = %s AND token_sha256 = %s FOR UPDATE",
+        f"issued_at, expires_at FROM {table} WHERE tenant_id = %s AND token_sha256 = %s "
+        "FOR UPDATE",
         (str(tenant_id), digest(token)),
     )
     row = cursor.fetchone()
     if row is None:  # pragma: no cover - located a moment ago; nothing deletes rows
         raise Refused(REFUSAL_TOKEN_UNKNOWN, "token", "no token of this operator matches.")
-    token_id, customer_id, state, redeemed_at, cancelled_at, cancelled_reason, expires_at = row
+    (token_id, customer_id, state, redeemed_at, cancelled_at, cancelled_reason, issued_at,
+     expires_at) = row
     # THE STATE READ IS PARSED, NOT TRUSTED. The schema's CHECK is what stops
     # anyone typing a state, and a schema is a thing an owner can alter:
     # measured with the CHECK dropped and 'expired' written onto a live row,
@@ -646,6 +675,14 @@ def _locked_token(cursor: Any, table: str, tenant_id: UUID, token: str, at: date
         raise Refused(
             REFUSAL_TOKEN_EXPIRED, "token",
             f"expires at {expires_at.isoformat()}, and it is {at.isoformat()}.",
+        )
+    # A redemption dated before its own issue is a clock that disagrees with
+    # the one that issued it, or a replay; written, it would put the record
+    # out of order (migration 0002 refuses the same row at the store).
+    if at < issued_at:
+        raise Refused(
+            REFUSAL_INSTANT_BEFORE_ISSUE, "at",
+            f"issued at {issued_at.isoformat()}, and the instant given is {at.isoformat()}.",
         )
     return as_uuid(token_id), as_uuid(customer_id), expires_at
 
@@ -666,7 +703,8 @@ def confirm_email_change(
 ) -> dict[str, Any]:
     """The new address presents the token: the change takes effect NOW, in one
     transaction -- the customer's email rewritten, the history row written
-    carrying the authorisation, the token spent. Until this call the old
+    carrying the authorisation, the token spent, and the resets delivered to
+    the old address cancelled (``EMAIL_CHANGED``). Until this call the old
     address is the address."""
     tenant_id = as_uuid(tenant_id)
     when = require_aware(at, "at")
@@ -681,6 +719,21 @@ def confirm_email_change(
         (str(tenant_id), str(token_id)),
     )
     new_email, authorisation, authorised_by = cursor.fetchone()
+    # The history's latest row by changed_at is the address in effect (the
+    # contract says so); a change dated before the one in effect would break
+    # that. Read under the customer's lock, so no confirmation lands between.
+    cursor.execute(
+        "SELECT max(changed_at) FROM customer_email_changes "
+        "WHERE tenant_id = %s AND customer_id = %s",
+        (str(tenant_id), str(customer_id)),
+    )
+    (in_effect_since,) = cursor.fetchone()
+    if in_effect_since is not None and when < in_effect_since:
+        raise Refused(
+            REFUSAL_INSTANT_BEFORE_LATEST_CHANGE, "at",
+            f"the change in effect took effect at {in_effect_since.isoformat()}, and the "
+            f"instant given is {when.isoformat()}.",
+        )
     holder = _address_holder(cursor, tenant_id, new_email)
     if holder is not None and holder != customer_id:
         raise Refused(
@@ -703,6 +756,8 @@ def confirm_email_change(
              authorised_by, when),
         )
         (change_id,) = cursor.fetchone()
+        _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id,
+                   by=f"email_change:{change_id}", at=when, reason=EMAIL_CHANGED)
     except psycopg.errors.IntegrityError as exc:
         raise refuse_on_constraint(exc) from None
     return {
@@ -762,7 +817,8 @@ def consume_password_reset(
     cursor: Any, tenant_id: UUID, token: object, password: object, *, at: object
 ) -> dict[str, Any]:
     """The current address presents the token with the new password: the
-    credential is replaced and the token spent, in one transaction."""
+    credential is replaced, the token spent and the customer's issued email
+    changes cancelled (``PASSWORD_SET``), in one transaction."""
     tenant_id = as_uuid(tenant_id)
     when = require_aware(at, "at")
     presented = require_text(token, "token")
@@ -772,6 +828,8 @@ def consume_password_reset(
     token_id, _owner, _expires = _locked_token(cursor, CREDENTIAL_RESETS, tenant_id,
                                                presented, when)
     _spend(cursor, CREDENTIAL_RESETS, tenant_id, token_id, when)
+    _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,
+               by=f"credential_reset:{token_id}", at=when, reason=PASSWORD_SET)
     written = _write_credential(cursor, tenant_id, customer_id, secret,
                                 by=f"credential_reset:{token_id}", at=when)
     written["credential_reset"] = str(token_id)

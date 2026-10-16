@@ -70,10 +70,13 @@ REFUSAL_AUTHORISATION_MISSING = "REFUSAL_AUTHORISATION_MISSING"
 REFUSAL_AUTHORISATION_AMBIGUOUS = "REFUSAL_AUTHORISATION_AMBIGUOUS"
 REFUSAL_VALID_MINUTES_NOT_STATED = "REFUSAL_VALID_MINUTES_NOT_STATED"
 REFUSAL_VALID_MINUTES_NOT_POSITIVE = "REFUSAL_VALID_MINUTES_NOT_POSITIVE"
+REFUSAL_VALID_MINUTES_TOO_LARGE = "REFUSAL_VALID_MINUTES_TOO_LARGE"
 REFUSAL_TOKEN_UNKNOWN = "REFUSAL_TOKEN_UNKNOWN"
 REFUSAL_TOKEN_ALREADY_USED = "REFUSAL_TOKEN_ALREADY_USED"
 REFUSAL_TOKEN_CANCELLED = "REFUSAL_TOKEN_CANCELLED"
 REFUSAL_TOKEN_EXPIRED = "REFUSAL_TOKEN_EXPIRED"
+REFUSAL_INSTANT_BEFORE_ISSUE = "REFUSAL_INSTANT_BEFORE_ISSUE"
+REFUSAL_INSTANT_BEFORE_LATEST_CHANGE = "REFUSAL_INSTANT_BEFORE_LATEST_CHANGE"
 REFUSAL_EXPIRED_IS_DERIVED = "REFUSAL_EXPIRED_IS_DERIVED"
 REFUSAL_STATE_UNKNOWN = "REFUSAL_STATE_UNKNOWN"
 REFUSAL_KDF_UNKNOWN = "REFUSAL_KDF_UNKNOWN"
@@ -186,6 +189,12 @@ REFUSALS: dict[str, str] = {
         "The token's window is zero or negative minutes, so there is no instant at "
         "which it could be used. State a positive whole number of minutes."
     ),
+    REFUSAL_VALID_MINUTES_TOO_LARGE: (
+        "The token's window is so many minutes that its expiry falls past the last "
+        "instant this module can compute -- the end of the year 9999, in UTC. Nothing "
+        "is written; state a smaller number of minutes. That is the only limit: no "
+        "maximum window is set, and the window is the caller's to state."
+    ),
     REFUSAL_TOKEN_UNKNOWN: (
         "No pending email change or password reset of this operator matches the "
         "token presented. The token itself is never rendered and never stored: "
@@ -205,6 +214,19 @@ REFUSALS: dict[str, str] = {
     REFUSAL_TOKEN_EXPIRED: (
         "This token's window has passed: the instant given is at or past its "
         "expires_at. Derived; nobody typed it. Nothing is written; issue a new one."
+    ),
+    REFUSAL_INSTANT_BEFORE_ISSUE: (
+        "The instant given is before this token was issued. A token cannot be used "
+        "before it existed: a confirmation or a reset dated earlier than its own issue "
+        "would be written into the record out of order. The detail names both instants. "
+        "Nothing is written; check the clock that stated the instant."
+    ),
+    REFUSAL_INSTANT_BEFORE_LATEST_CHANGE: (
+        "The instant given for this email change is before the change now in effect "
+        "took effect. The email history is read oldest first by changed_at, so a change "
+        "dated earlier would leave the history's latest row naming an address that is "
+        "not the current one. The detail names both instants. Nothing is written; check "
+        "the clock that stated the instant."
     ),
     REFUSAL_EXPIRED_IS_DERIVED: (
         "A token's 'expired' is derived from its expires_at against the instant asked "

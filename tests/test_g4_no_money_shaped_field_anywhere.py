@@ -131,9 +131,10 @@ COMMANDS_THE_OLD_LIST_DROVE = frozenset({
 AT = "2026-06-01T09:00:00-06:00"
 LATER_AT = "2026-06-01T09:05:00-06:00"
 
-#: A runner takes argv and the password to put in the environment (or None),
-#: and returns (exit status, the JSON printed).
-Runner = Callable[[list[str], str | None], tuple[int, dict]]
+#: A runner takes argv, the password to put in the environment (or None) and
+#: the token to present on standard input (or None), and returns (exit status,
+#: the JSON printed).
+Runner = Callable[[list[str], str | None, str | None], tuple[int, dict]]
 
 
 def drive_every_command(run: Runner, tenant_id, terms_dir: Path) -> dict[str, dict]:
@@ -149,8 +150,9 @@ def drive_every_command(run: Runner, tenant_id, terms_dir: Path) -> dict[str, di
     T = ["--tenant", str(tenant_id)]
     out: dict[str, dict] = {}
 
-    def done(command: str, argv: list[str], password: str | None = None) -> dict:
-        status, body = run([command, *T, *argv], password)
+    def done(command: str, argv: list[str], password: str | None = None,
+             token: str | None = None) -> dict:
+        status, body = run([command, *T, *argv], password, token)
         assert status == 0, (command, status, body)
         out[command] = body
         return body
@@ -165,9 +167,9 @@ def drive_every_command(run: Runner, tenant_id, terms_dir: Path) -> dict[str, di
     done("verify-password", C, A_PASSWORD)
     change = done("start-email-change", [*C, "--new-email", "g4.new@example.com",
                                          "--valid-minutes", "30", "--at", AT], A_PASSWORD)
-    done("confirm-email-change", ["--token", change["token"], "--at", LATER_AT])
+    done("confirm-email-change", ["--at", LATER_AT], token=change["token"])
     reset = done("start-password-reset", [*C, "--valid-minutes", "30", "--by", "o", "--at", AT])
-    done("consume-password-reset", ["--token", reset["token"], "--at", LATER_AT], ANOTHER_PASSWORD)
+    done("consume-password-reset", ["--at", LATER_AT], ANOTHER_PASSWORD, token=reset["token"])
     done("show-account", C)
     done("show-acceptances", C)
 
@@ -198,12 +200,15 @@ def keys_at_every_depth(outputs: dict[str, dict]) -> set[str]:
 
 def in_process_runner(capsys, monkeypatch) -> Runner:
     from customer_account.cli import main
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import token_on_stdin
 
-    def run(argv, password):
+    def run(argv, password, token):
         if password is None:
             monkeypatch.delenv("CUSTOMER_ACCOUNT_PASSWORD", raising=False)
         else:
             monkeypatch.setenv("CUSTOMER_ACCOUNT_PASSWORD", password)
+        if token is not None:
+            token_on_stdin(monkeypatch, token)
         status = main(argv)
         printed = capsys.readouterr().out
         return status, (json.loads(printed) if printed.strip() else {})
@@ -216,12 +221,13 @@ def child_process_runner() -> Runner:
     what runs. In-process, the already-imported module would run instead."""
     root = Path(__file__).resolve().parent.parent
 
-    def run(argv, password):
+    def run(argv, password, token):
         env = {k: v for k, v in os.environ.items() if k != "CUSTOMER_ACCOUNT_PASSWORD"}
         if password is not None:
             env["CUSTOMER_ACCOUNT_PASSWORD"] = password
         done = subprocess.run([sys.executable, "-m", "customer_account.cli", *argv], cwd=root,
-                              capture_output=True, text=True, env=env)
+                              capture_output=True, text=True, env=env,
+                              input=None if token is None else f"{token}\n")
         return done.returncode, (json.loads(done.stdout) if done.stdout.strip() else {})
 
     return run

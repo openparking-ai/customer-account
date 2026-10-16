@@ -13,9 +13,11 @@ call that minted it. Delivering it is the caller's.
 
 **EXPIRY IS DERIVED, NEVER TYPED.** A token carries ``expires_at``, stated at
 issue from a window the caller states in minutes (``require_valid_minutes``:
-no default). "Expired" is ``expires_at`` against the instant asked about; the
-typed states are ``issued``, ``redeemed`` and ``cancelled``, the sibling
-module's vocabulary, and the migration's CHECK refuses anything else.
+no default, and no maximum -- only a window whose end cannot be computed is
+refused, by name, in ``expiry``). "Expired" is ``expires_at`` against the
+instant asked about; the typed states are ``issued``, ``redeemed`` and
+``cancelled``, the sibling module's vocabulary, and the migration's CHECK
+refuses anything else.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 from customer_account.findings import (
@@ -31,6 +33,7 @@ from customer_account.findings import (
     REFUSAL_STATE_UNKNOWN,
     REFUSAL_VALID_MINUTES_NOT_POSITIVE,
     REFUSAL_VALID_MINUTES_NOT_STATED,
+    REFUSAL_VALID_MINUTES_TOO_LARGE,
     Refused,
 )
 
@@ -103,7 +106,20 @@ def require_valid_minutes(value: object) -> int:
 
 
 def expiry(issued_at: datetime, valid_minutes: int) -> datetime:
-    return issued_at + timedelta(minutes=valid_minutes)
+    """``issued_at`` plus the window -- or a refusal by name where that instant
+    cannot be computed: past the end of the year 9999, in UTC, which is where
+    the store's instants are read back. A window that large was a traceback.
+    That is the only limit here; no maximum window is set."""
+    try:
+        expires_at = issued_at + timedelta(minutes=valid_minutes)
+        expires_at.astimezone(UTC)
+    except OverflowError:
+        raise Refused(
+            REFUSAL_VALID_MINUTES_TOO_LARGE, "valid_minutes",
+            f"valid_minutes is {valid_minutes}: from {issued_at.isoformat()} that is past "
+            "the last instant this module can compute.",
+        ) from None
+    return expires_at
 
 
 def is_expired(expires_at: datetime, at: datetime) -> bool:

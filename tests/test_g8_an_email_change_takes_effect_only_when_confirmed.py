@@ -30,8 +30,15 @@ same way on every read, arbitrarily, and the contract says so. The tie test
 below confirms eight changes in one transaction so the chance that insertion
 order happens to equal id order is 1 in 40,320.
 
+**AND THE LATEST ROW IS THE ADDRESS IN EFFECT.** The history is read by
+``changed_at``, the instant the caller stated; a change confirmed at an
+instant before the change now in effect would make the latest row name an
+address that is not the current one. That is refused by name, and the same
+instant as the change in effect is not.
+
 Controls: the start planted to rewrite the address immediately; the
-neither-given refusal planted away; the tiebreak column planted away.
+neither-given refusal planted away; the tiebreak column planted away; the
+before-the-change-in-effect refusal planted away.
 """
 
 from __future__ import annotations
@@ -192,7 +199,7 @@ def test_the_command_line_finds_by_the_old_address_until_confirmed(
     app, tenant_id, capsys, monkeypatch
 ):
     from customer_account.cli import main
-    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app, token_on_stdin
 
     dsn_for_the_app(monkeypatch)
     customer_id = _with_credential(app, tenant_id)
@@ -205,8 +212,8 @@ def test_the_command_line_finds_by_the_old_address_until_confirmed(
     assert json.loads(capsys.readouterr().out)["email"] == OLD
     assert main(["show-account", *T, "--email", NEW]) == 3
     assert json.loads(capsys.readouterr().out)["refused"] == f.REFUSAL_CUSTOMER_NOT_FOUND
-    assert main(["confirm-email-change", *T, "--token", token,
-                 "--at", "2026-06-01T09:01:00-06:00"]) == 0
+    token_on_stdin(monkeypatch, token)
+    assert main(["confirm-email-change", *T, "--at", "2026-06-01T09:01:00-06:00"]) == 0
     capsys.readouterr()
     assert main(["show-account", *T, "--email", NEW]) == 0
     assert json.loads(capsys.readouterr().out)["email"] == NEW
@@ -276,3 +283,56 @@ def test_the_tiebreak_changes_nothing_for_changes_that_do_not_tie(app, tenant_id
                                               for h in shown["email_changes"]]
     assert shown["email_changes"][-1]["changed_at"] == LATER, "the row in effect is the latest"
     assert shown["email"] == NEW == shown["email_changes"][-1]["to_email"]
+
+
+@pytest.mark.guarantee("G8")
+def test_a_change_dated_before_the_change_in_effect_is_refused_and_the_history_stays_true(
+    app, tenant_id
+):
+    """OP-NODE-088. The change in effect took effect at +65 minutes. A second
+    change issued at +120 and confirmed "at" +0 is refused (before its own
+    issue -- the shape measured: the account moved and the history's latest
+    row still named the old address). A change STARTED at +60, by a clock
+    behind the one that confirmed the first, and confirmed at +61, is refused
+    by its own name: before the change in effect. Nothing is written by
+    either; confirmed at +65 itself, the same token takes effect and is the
+    latest row."""
+    customer_id = _with_credential(app, tenant_id)
+    in_effect = CREATED_AT + 65 * MINUTE
+    third = "alice.third@example.com"
+    with tenant(app, tenant_id) as cursor:
+        first = start_email_change(cursor, tenant_id, customer_id, NEW, valid_minutes=30,
+                                   at=CREATED_AT + 50 * MINUTE, by="front desk")
+        confirm_email_change(cursor, tenant_id, first["token"], at=in_effect)
+        late = start_email_change(cursor, tenant_id, customer_id, third, valid_minutes=30,
+                                  at=CREATED_AT + 120 * MINUTE, by="front desk")
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as before_issue:
+            confirm_email_change(cursor, tenant_id, late["token"], at=CREATED_AT)
+    app.rollback()
+    assert before_issue.value.code == f.REFUSAL_INSTANT_BEFORE_ISSUE
+    with tenant(app, tenant_id) as cursor:
+        skewed = start_email_change(cursor, tenant_id, customer_id, third, valid_minutes=30,
+                                    at=in_effect - 5 * MINUTE, by="front desk")
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as before_latest:
+            confirm_email_change(cursor, tenant_id, skewed["token"], at=in_effect - 4 * MINUTE)
+    app.rollback()
+    assert before_latest.value.code == f.REFUSAL_INSTANT_BEFORE_LATEST_CHANGE
+    assert before_latest.value.field == "at"
+    with tenant(app, tenant_id) as cursor:
+        shown = show_account(cursor, tenant_id, customer_id)
+    app.rollback()
+    assert shown["email"] == NEW == shown["email_changes"][-1]["to_email"]
+    assert len(shown["email_changes"]) == 1, "a refused confirmation wrote a history row"
+    assert [p["new_email"] for p in shown["pending_email_changes"]] == [third]
+    # THE OVER-REACH CONTROL: the instant of the change in effect is not before it
+    with tenant(app, tenant_id) as cursor:
+        confirm_email_change(cursor, tenant_id, skewed["token"], at=in_effect)
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        shown = show_account(cursor, tenant_id, customer_id)
+    app.rollback()
+    assert shown["email"] == third == shown["email_changes"][-1]["to_email"]

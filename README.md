@@ -6,7 +6,7 @@ money, no passes, no vehicles, no stays.
 
 Standalone. It runs with no parking system around it and no platform; the
 package that hashes and verifies a password has no dependencies at all, and
-the store behind it is one Postgres migration.
+the store behind it is the Postgres migrations in `migrations/`.
 
 ```
 $ customer-account create-account --tenant T --email alice@example.com --by self \
@@ -17,7 +17,7 @@ $ CUSTOMER_ACCOUNT_PASSWORD=... customer-account verify-password --tenant T --cu
 $ customer-account start-password-reset --tenant T --customer ID --valid-minutes 30 --by ops --at ...
 $ customer-account start-email-change --tenant T --customer ID --new-email b@example.com \
       --valid-minutes 30 --at ... [--by WHO]
-$ customer-account confirm-email-change --tenant T --token TOKEN --at ...
+$ printf '%s\n' "$TOKEN" | customer-account confirm-email-change --tenant T --at ...
 ```
 
 Exit status 0 done or verified, 1 not verified (`verify-password` only), 2 the
@@ -76,9 +76,19 @@ sharing an instant read deterministically but **arbitrarily**, and the
 contract says so.
 
 A token is 32 bytes from the CSPRNG, stored as its SHA-256, and printed **once,
-by the call that minted it**. A newer token cancels the older one for the same
-customer. Expired, already used, cancelled and unknown are four refusals, by
-name.
+by the call that minted it**. It is presented back as one line on standard
+input, never as an argument, for the reason a password is never one. A newer
+token cancels the older one for the same customer. Expired, already used,
+cancelled and unknown are four refusals, by name; a token presented at an
+instant before it was issued is refused by name too, and so is an email change
+dated before the change now in effect.
+
+**Each recovery path closes the other.** A new password -- set, or from a
+consumed reset -- cancels the customer's pending email change, so a change
+started by someone holding the old password does not survive it; a confirmed
+email change cancels the resets delivered to the old address. Each
+cancellation is recorded with its reason and is refused by name if the token
+is presented afterwards.
 
 **This module sends nothing.** No email, no SMS, no network. It mints the
 token and names the address it is for; delivering it is the caller's.
@@ -172,6 +182,7 @@ bypasses row-level security unconditionally, and `FORCE` does not stop one.
 
 ```
 psql "$DSN" -f migrations/0001_tenants_customers_credentials_consent_and_rls.sql
+psql "$DSN" -f migrations/0002_a_token_is_not_redeemed_before_it_was_issued.sql
 CUSTOMER_ACCOUNT_APP_PASSWORD=... python scripts/ensure-app-role.py "$DSN"
 ```
 
