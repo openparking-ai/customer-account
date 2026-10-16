@@ -335,16 +335,24 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "scripts/ensure-app-role.py",
         source(
             '                sql.SQL("ALTER ROLE customer_account_app LOGIN PASSWORD {}").format(',
-            "                    sql.Literal(password)",
+            "                    sql.Literal(verifier)",
             "                )",
         ),
         source(
-            '                "ALTER ROLE customer_account_app LOGIN PASSWORD %s", (password,)'
+            '                "ALTER ROLE customer_account_app LOGIN PASSWORD %s", (verifier,)'
             "  # PLANTED",
         ),
         "the install step goes back to a bind parameter in a utility statement, which "
         "PostgreSQL refuses -- the defect a sibling module shipped because nothing ran "
         "the script",
+    ),
+    "G7/password-sent": (
+        "tests/test_g7_rls_from_migration_0001.py",
+        "scripts/ensure-app-role.py",
+        "        verifier = scram_verifier(connection, password)\n",
+        "        verifier = password  # PLANTED: the password itself is sent\n",
+        "the install step sends the application role's password to the server as plain "
+        "text, where a server log of statements keeps it",
     ),
     "G8/immediate": (
         "tests/test_g8_an_email_change_takes_effect_only_when_confirmed.py",

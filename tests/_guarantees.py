@@ -69,7 +69,10 @@ GUARANTEES: dict[str, str] = {
         "database catalogue, never from a list of table names -- and every customer "
         "reference is half of a composite tenant key. A second tenant reads none of "
         "the first tenant's rows and updates none of them, on every table, and the "
-        "connection is proven able to be stopped before that is believed."
+        "connection is proven able to be stopped before that is believed. The install "
+        "step sets the application role's password as the SCRAM-SHA-256 verifier it "
+        "computes, so no statement it sends -- and no server log of statements -- "
+        "carries the password."
     ),
     "G8": (
         "An email change does not take effect until confirmed at the NEW address, and "

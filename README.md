@@ -186,6 +186,10 @@ psql "$DSN" -f migrations/0002_a_token_is_not_redeemed_before_it_was_issued.sql
 CUSTOMER_ACCOUNT_APP_PASSWORD=... python scripts/ensure-app-role.py "$DSN"
 ```
 
+The install script sends the server the SCRAM-SHA-256 verifier it computes
+from the password, never the password, so no statement and no server log of
+statements holds it.
+
 Tenant rows are seeded by the owner; this module reads them and never writes
 one. The application's DSN (`CUSTOMER_ACCOUNT_DSN`) connects as
 `customer_account_app`.
