@@ -18,12 +18,19 @@ defect the contract check cannot see on its own.
 **AND WHAT THE TOKEN WINDOW AND STANDARD INPUT CAN MEET.** A window so large
 that its expiry cannot be computed was a traceback, exit 1; it is refused by
 name, exit 3, with nothing written -- and no maximum was added, so a window of
-years is accepted as before. A token on standard input that is blank or is
-not text is refused by name, never a traceback.
+years is accepted as before. The store reads an instant back in the SESSION's
+TimeZone, not in UTC, so an expiry is refused too where a session the database
+accepts could not read it back: one at 9999-12-31T20:00Z was stored, and every
+later read of the row in a session east of UTC failed in the driver. A token on
+standard input that is blank or is not text is refused by name, never a
+traceback -- under the C locale and ``PYTHONUTF8=1`` as well, where Python
+reads standard input leniently and nothing raises at the read.
 
 Controls: the boundary's ``except Refused`` planted away; the window's
-overflow refusal planted away; the not-text refusal on standard input planted
-away.
+overflow refusal planted away; the read-back margin planted away at each end;
+the range-naming detail planted back to "past the last instant"; the
+not-text refusal on standard input planted away; the strict re-encoding of the
+line planted away.
 """
 
 from __future__ import annotations
@@ -170,22 +177,45 @@ def test_a_refusal_from_the_store_is_the_same_json_shape_and_writes_nothing(
 
 @pytest.mark.guarantee("G14")
 def test_a_window_whose_end_cannot_be_computed_is_refused_by_name_and_a_long_one_is_not():
-    """OP-NODE-088, at the function the doors share: past the year 9999 (in
-    UTC too) is refused by name; a window of about nine and a half years is an
-    instant like any other -- no maximum was added."""
-    from datetime import datetime, timedelta, timezone
+    """OP-NODE-088, at the function the doors share: an expiry that cannot be
+    computed, or that a session the database accepts could not read back, is
+    refused by name; a window of about nine and a half years is an instant like
+    any other -- no maximum was added."""
+    from datetime import UTC, datetime, timedelta, timezone
 
-    from customer_account.tokens import expiry
+    from customer_account.tokens import FIRST_READABLE, LAST_READABLE, expiry
 
-    # an hour on from here is still the year 9999 where it was stated, and the
-    # year 10000 in UTC, where the store's instants are read back
+    # An hour on from here is still the year 9999 where it was stated, and the
+    # year 10000 in UTC: past what a datetime can hold anywhere.
     near_the_end = datetime(9999, 12, 31, 20, tzinfo=timezone(timedelta(hours=-6)))
+    # The reported case: 9999-12-31T20:00Z is a datetime in UTC, so a check made
+    # in UTC alone accepted it, and the store wrote it. The driver reads an
+    # instant back in the SESSION's TimeZone, and at Pacific/Kiritimati (+14)
+    # this one is the year 10000: every later read of the row failed.
+    stated = datetime(2026, 6, 1, 9, tzinfo=timezone(timedelta(hours=-6)))
+    reported = 4_193_699_340
+    assert stated + timedelta(minutes=reported) == datetime(9999, 12, 31, 20, tzinfo=UTC)
+    # The low end: a 30-minute window from an instant that is the year 0 in UTC.
+    at_the_start = datetime(1, 1, 1, tzinfo=timezone(timedelta(hours=5)))
+    # Just inside the first instant a datetime holds, but not a session west of
+    # UTC: at Etc/GMT+12 (-12) this is the year 0.
+    first_day = datetime(1, 1, 1, 10, tzinfo=UTC)
     for issued_at, minutes in ((CREATED_AT, 5_000_000_000), (CREATED_AT, 10**20),
-                               (near_the_end, 60)):
+                               (near_the_end, 60), (stated, reported), (at_the_start, 30),
+                               (first_day, 30), (LAST_READABLE - timedelta(minutes=29), 30)):
         with pytest.raises(f.Refused) as refused:
             expiry(issued_at, minutes)
         assert refused.value.code == f.REFUSAL_VALID_MINUTES_TOO_LARGE, (issued_at, minutes)
         assert refused.value.field == "valid_minutes"
+        # The detail names the range, and never says "past the last instant" of a
+        # window that overflowed at the low end -- that one is thirty minutes long.
+        detail = refused.value.detail
+        assert "outside the instants" in detail and "past the last instant" not in detail
+        assert FIRST_READABLE.isoformat() in detail and LAST_READABLE.isoformat() in detail
+    # Each end of the range is itself an expiry like any other.
+    end = LAST_READABLE - timedelta(minutes=30)
+    assert expiry(end, 30) == LAST_READABLE
+    assert expiry(FIRST_READABLE, 30) == FIRST_READABLE + timedelta(minutes=30)
     assert expiry(CREATED_AT, 5_000_000) == CREATED_AT + timedelta(minutes=5_000_000)
 
 
@@ -228,6 +258,137 @@ def test_a_window_too_large_to_compute_is_refused_by_name_exit_3_and_writes_noth
     status, out, err = run("5000000")
     assert status == 0, (out, err)
     assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(1,)]
+
+
+@pytest.mark.guarantee("G14")
+@store_test
+def test_each_end_of_the_range_reads_back_in_the_widest_session_time_zones_the_database_accepts():
+    """The margin is measured, not assumed. The driver reads a timestamptz in
+    the session's TimeZone; PostgreSQL accepts one up to 167 hours from UTC
+    either way, and 168 is refused. Each end of the range ``expiry`` allows
+    reads back, unchanged, in a session at each of those extremes and at the
+    widest named zones. The control: the reported expiry, 9999-12-31T20:00Z,
+    does NOT read back in a session at Pacific/Kiritimati -- which is what
+    made a stored row unreadable."""
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    from customer_account.tokens import FIRST_READABLE, LAST_READABLE
+    from store_harness import DSN
+
+    with psycopg.connect(DSN, autocommit=True) as connection:
+
+        def session_at(zone: str) -> None:
+            connection.execute("SELECT set_config('TimeZone', %s, false)", (zone,))
+
+        for zone in ("XXX-167", "XXX+167", "Pacific/Kiritimati", "Etc/GMT+12"):
+            session_at(zone)
+            for instant in (FIRST_READABLE, LAST_READABLE):
+                (back,) = connection.execute("SELECT %s::timestamptz", (instant,)).fetchone()
+                assert back == instant, (zone, instant, back)
+        session_at("Pacific/Kiritimati")
+        with pytest.raises(psycopg.DataError):
+            connection.execute("SELECT %s::timestamptz",
+                               (datetime(9999, 12, 31, 20, tzinfo=UTC),)).fetchone()
+        with pytest.raises(psycopg.errors.InvalidParameterValue):
+            session_at("XXX-168")
+
+
+@pytest.mark.guarantee("G14")
+@store_test
+@pytest.mark.parametrize("command", ["start-password-reset", "start-email-change"])
+def test_an_expiry_a_session_east_of_utc_cannot_read_back_is_refused_exit_3_and_writes_nothing(
+    app, tenant_id, capsys, monkeypatch, command
+):
+    """The reported case, at the door: in a session at Pacific/Kiritimati
+    (+14), 4,193,699,340 minutes from 2026-06-01T09:00-06:00 is an expiry at
+    9999-12-31T20:00Z. It was accepted, exit 0, and the next read of the row
+    in that session -- consume-password-reset, or show-account with the change
+    pending -- exited 2 with a sentence blaming the database. Now it is refused
+    by name, exit 3, with nothing written; five million minutes is accepted in
+    the same session, and the account then reads back."""
+    import os
+
+    from psycopg import conninfo
+
+    from customer_account.cli import main
+    from customer_account.store.postgres import tenant
+    from customer_account.store.records import set_password
+    from store_harness import query
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    params = conninfo.conninfo_to_dict(os.environ["CUSTOMER_ACCOUNT_DSN"])
+    monkeypatch.setenv("CUSTOMER_ACCOUNT_DSN", conninfo.make_conninfo(
+        **{**params, "options": "-c timezone=Pacific/Kiritimati"}))
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        set_password(cursor, tenant_id, customer_id, A_PASSWORD, by="o", at=CREATED_AT)
+    app.commit()
+    monkeypatch.delenv("CUSTOMER_ACCOUNT_PASSWORD", raising=False)
+    table = "credential_resets" if command == "start-password-reset" else "pending_email_changes"
+    extra = ["--by", "o"] + (["--new-email", "alice.new@example.com"]
+                             if command == "start-email-change" else [])
+    T = ["--tenant", str(tenant_id), "--customer", str(customer_id)]
+
+    def run(minutes: str):
+        return _run(main, [command, *T, "--valid-minutes", minutes, *extra,
+                           "--at", "2026-06-01T09:00:00-06:00"], capsys)
+
+    status, out, err = run("4193699340")
+    assert status == 3 and err == "" and "Traceback" not in out, (status, out, err)
+    printed = json.loads(out)
+    assert printed["refused"] == f.REFUSAL_VALID_MINUTES_TOO_LARGE, printed
+    assert printed["field"] == "valid_minutes"
+    assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(0,)]
+    status, out, err = run("5000000")
+    assert status == 0, (out, err)
+    assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(1,)]
+    status, out, err = _run(main, ["show-account", *T], capsys)
+    assert status == 0 and err == "", (status, out, err)
+
+
+@pytest.mark.guarantee("G14")
+@store_test
+@pytest.mark.parametrize("command", ["confirm-email-change", "consume-password-reset"])
+@pytest.mark.parametrize("lenient", [{"PYTHONUTF8": "1"}, {"LC_ALL": "C"}],
+                         ids=["PYTHONUTF8=1", "LC_ALL=C"])
+def test_a_token_that_is_not_utf8_is_refused_by_name_where_python_reads_stdin_leniently(
+    app, tenant_id, monkeypatch, command, lenient
+):
+    """In a FRESH interpreter, with the real standard input. Under the C
+    locale (LANG unset: containers, cron, systemd) and under PYTHONUTF8=1,
+    Python reads standard input with errors='surrogateescape', so bytes that
+    are not UTF-8 raise nothing at the read; they reached the digest and
+    raised there, and the operator got a traceback and exit 1. The in-process
+    test below swaps in a strict reader, so it never meets this.
+
+    The control first: the child must really read leniently, or a pass here
+    would prove nothing about the case."""
+    import os
+    import subprocess
+    import sys
+
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+
+    dsn_for_the_app(monkeypatch)
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONIOENCODING", "PYTHONUTF8", "LANG", "LC_ALL", "LC_CTYPE")}
+    env.update(lenient)
+    env["CUSTOMER_ACCOUNT_PASSWORD"] = A_PASSWORD
+    probe = subprocess.run([sys.executable, "-c", "import sys; print(sys.stdin.errors)"],
+                           input=b"", capture_output=True, env=env)
+    assert probe.stdout.decode().strip() == "surrogateescape", probe
+    done = subprocess.run(
+        [sys.executable, "-m", "customer_account.cli", command, "--tenant", str(tenant_id),
+         "--at", "2026-06-01T09:00:00-06:00"],
+        cwd=ROOT, input=b"\xff\xfe not text\n", capture_output=True, env=env,
+    )
+    assert b"Traceback" not in done.stdout + done.stderr, done.stderr.decode(errors="replace")
+    assert (done.returncode, done.stderr) == (3, b""), done
+    printed = json.loads(done.stdout)
+    assert (printed["refused"], printed["field"]) == (f.REFUSAL_FIELD_BLANK, "token"), printed
 
 
 @pytest.mark.guarantee("G14")

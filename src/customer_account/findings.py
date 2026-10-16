@@ -190,10 +190,11 @@ REFUSALS: dict[str, str] = {
         "which it could be used. State a positive whole number of minutes."
     ),
     REFUSAL_VALID_MINUTES_TOO_LARGE: (
-        "The token's window is so many minutes that its expiry falls past the last "
-        "instant this module can compute -- the end of the year 9999, in UTC. Nothing "
-        "is written; state a smaller number of minutes. That is the only limit: no "
-        "maximum window is set, and the window is the caller's to state."
+        "The token's expiry -- the instant given plus the window -- falls outside the "
+        "instants this module can compute and read back in every session time zone the "
+        "database accepts; the detail names that range. Nothing is written; state a "
+        "smaller number of minutes. That is the only limit: no maximum window is set, "
+        "and the window is the caller's to state."
     ),
     REFUSAL_TOKEN_UNKNOWN: (
         "No pending email change or password reset of this operator matches the "

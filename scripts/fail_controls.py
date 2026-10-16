@@ -606,6 +606,40 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "a token on standard input that is not text reaches the shell as a "
         "UnicodeDecodeError traceback instead of the named refusal",
     ),
+    "G14/stdin-strict": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "cli.py",
+        '        line.encode("utf-8")',
+        "        pass  # PLANTED: the line is not re-encoded strictly",
+        "under the C locale or PYTHONUTF8=1 the bytes that are not UTF-8 come back from "
+        "standard input as surrogates, reach the digest and raise there: a traceback and "
+        "exit 1 in a fresh interpreter, where the test runs the door",
+    ),
+    "G14/read-back-last": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        "LAST_READABLE = datetime.max.replace(tzinfo=UTC) - READ_BACK_MARGIN",
+        "LAST_READABLE = datetime.max.replace(tzinfo=UTC)  # PLANTED: judged in UTC only",
+        "an expiry at 9999-12-31T20:00Z is accepted and stored again, and a session at "
+        "Pacific/Kiritimati cannot read the row back: the next door to read it exits 2",
+    ),
+    "G14/read-back-first": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        "FIRST_READABLE = datetime.min.replace(tzinfo=UTC) + READ_BACK_MARGIN",
+        "FIRST_READABLE = datetime.min.replace(tzinfo=UTC)  # PLANTED: judged in UTC only",
+        "an expiry in the first hours of the year 1 is accepted again, and a session west "
+        "of UTC reads it as the year 0, which the driver cannot hold",
+    ),
+    "G14/window-detail": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        '            "expiry falls outside the instants this module can compute and read back in "',
+        '            "expiry is past the last instant this module can compute and read back in "'
+        "  # PLANTED",
+        "the refusal's detail says 'past the last instant' again, of a thirty-minute window "
+        "that overflowed at the start of the range",
+    ),
     "G15": (
         "tests/test_g15_no_http_surface_and_nothing_is_sent.py",
         "cli.py",

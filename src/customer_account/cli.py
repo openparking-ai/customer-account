@@ -262,9 +262,19 @@ def _token() -> str:
     and lands in the shell's history, which is why a password is read from the
     environment. The line goes to the module as read; the module strips it and
     refuses a blank by name. Input that is not text is refused here, by name,
-    and is never echoed."""
+    and is never echoed.
+
+    **NOT TEXT IS JUDGED STRICTLY, WHATEVER THE LOCALE.** Under the C or POSIX
+    locale (LANG unset: containers, cron, systemd) and under ``PYTHONUTF8=1``,
+    Python reads standard input with ``errors='surrogateescape'``: bytes that
+    are not UTF-8 come back as lone surrogates and ``readline`` raises nothing.
+    Measured: such a line reached the digest, raised ``UnicodeEncodeError``
+    there, and the operator got a traceback and exit 1. So the line is encoded
+    back to UTF-8, strictly, before it leaves this function."""
     try:
-        return sys.stdin.readline() if sys.stdin is not None else ""
+        line = sys.stdin.readline() if sys.stdin is not None else ""
+        line.encode("utf-8")
+        return line
     except (OSError, ValueError):
         raise Refused(
             REFUSAL_FIELD_BLANK, "token", f"the token on {TOKEN_FROM} could not be read as text."

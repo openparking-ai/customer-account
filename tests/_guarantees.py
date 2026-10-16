@@ -139,8 +139,10 @@ GUARANTEES: dict[str, str] = {
         "boundary as {refused, field, detail} with exit 3; a machine that is not set "
         "up -- no DSN, a database that does not connect -- is one sentence on stderr "
         "with exit 2; a malformed instant, an unreadable text file, a malformed "
-        "channel pair, a token on standard input that is blank or not text, and a "
-        "token window too large to compute are each refused by name."
+        "channel pair, a token on standard input that is blank or not text (under "
+        "any locale, the C locale's lenient decoding included), and a token window "
+        "whose expiry cannot be computed or read back in every session time zone are "
+        "each refused by name."
     ),
     "G15": (
         "This module has no HTTP surface and sends nothing: no web framework, no HTTP "

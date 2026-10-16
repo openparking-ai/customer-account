@@ -13,11 +13,11 @@ call that minted it. Delivering it is the caller's.
 
 **EXPIRY IS DERIVED, NEVER TYPED.** A token carries ``expires_at``, stated at
 issue from a window the caller states in minutes (``require_valid_minutes``:
-no default, and no maximum -- only a window whose end cannot be computed is
-refused, by name, in ``expiry``). "Expired" is ``expires_at`` against the
-instant asked about; the typed states are ``issued``, ``redeemed`` and
-``cancelled``, the sibling module's vocabulary, and the migration's CHECK
-refuses anything else.
+no default, and no maximum -- only a window whose end cannot be computed, or
+read back in every session time zone, is refused, by name, in ``expiry``).
+"Expired" is ``expires_at`` against the instant asked about; the typed states
+are ``issued``, ``redeemed`` and ``cancelled``, the sibling module's
+vocabulary, and the migration's CHECK refuses anything else.
 """
 
 from __future__ import annotations
@@ -105,20 +105,38 @@ def require_valid_minutes(value: object) -> int:
     return value
 
 
+#: How far an instant can move when the store reads it back. The driver reads
+#: a timestamptz in the SESSION's TimeZone, not in UTC, and a Python datetime
+#: ends at the years 1 and 9999 wherever it is read. PostgreSQL 16 accepts a
+#: session TimeZone up to 167 hours from UTC (a POSIX-style 'XXX-167' is
+#: accepted and 'XXX-168' refused, measured); a named zone is within 16 hours. An
+#: instant a week inside a datetime's range reads back in every one of them.
+READ_BACK_MARGIN = timedelta(days=7)
+FIRST_READABLE = datetime.min.replace(tzinfo=UTC) + READ_BACK_MARGIN
+LAST_READABLE = datetime.max.replace(tzinfo=UTC) - READ_BACK_MARGIN
+
+
 def expiry(issued_at: datetime, valid_minutes: int) -> datetime:
     """``issued_at`` plus the window -- or a refusal by name where that instant
-    cannot be computed: past the end of the year 9999, in UTC, which is where
-    the store's instants are read back. A window that large was a traceback.
+    cannot be computed, or could not be read back in every session time zone:
+    outside ``FIRST_READABLE`` to ``LAST_READABLE``. A window whose end could
+    not be computed was a traceback; one ending in the last hours of the year
+    9999 was stored, and then every read of the row in a session east of UTC
+    failed in the driver.
     That is the only limit here; no maximum window is set."""
     try:
         expires_at = issued_at + timedelta(minutes=valid_minutes)
-        expires_at.astimezone(UTC)
+        readable = FIRST_READABLE <= expires_at.astimezone(UTC) <= LAST_READABLE
     except OverflowError:
+        readable = False
+    if not readable:
         raise Refused(
             REFUSAL_VALID_MINUTES_TOO_LARGE, "valid_minutes",
-            f"valid_minutes is {valid_minutes}: from {issued_at.isoformat()} that is past "
-            "the last instant this module can compute.",
-        ) from None
+            f"valid_minutes is {valid_minutes}: from {issued_at.isoformat()} the token's "
+            "expiry falls outside the instants this module can compute and read back in "
+            f"every session time zone, {FIRST_READABLE.isoformat()} to "
+            f"{LAST_READABLE.isoformat()}.",
+        )
     return expires_at
 
 
