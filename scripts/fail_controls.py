@@ -640,6 +640,44 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "the refusal's detail says 'past the last instant' again, of a thirty-minute window "
         "that overflowed at the start of the range",
     ),
+    "G14/expiry-first-change": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "store/records.py",
+        source(
+            "    expires_at = expiry(when, minutes)",
+            "    superseded = _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,",
+            "                            by=authorised_by, at=when)",
+            "    minted = mint()",
+        ),
+        source(
+            "    superseded = _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,",
+            "                            by=authorised_by, at=when)",
+            "    minted = mint()",
+            "    expires_at = expiry(when, minutes)  # PLANTED: after the supersede again",
+        ),
+        "start_email_change cancels the customer's live change as 'superseded' before the "
+        "window is refused, so the caller's open transaction holds a write the refusal "
+        "says never happened, and a commit kills the emailed link",
+    ),
+    "G14/expiry-first-reset": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "store/records.py",
+        source(
+            "    expires_at = expiry(when, minutes)",
+            "    superseded = _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id, "
+            "by=who, at=when)",
+            "    minted = mint()",
+        ),
+        source(
+            "    superseded = _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id, "
+            "by=who, at=when)",
+            "    minted = mint()",
+            "    expires_at = expiry(when, minutes)  # PLANTED: after the supersede again",
+        ),
+        "start_password_reset cancels the customer's live reset as 'superseded' before the "
+        "window is refused, so the caller's open transaction holds a write the refusal "
+        "says never happened, and a commit kills the emailed link",
+    ),
     "G15": (
         "tests/test_g15_no_http_surface_and_nothing_is_sent.py",
         "cli.py",

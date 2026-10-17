@@ -18,7 +18,9 @@ defect the contract check cannot see on its own.
 **AND WHAT THE TOKEN WINDOW AND STANDARD INPUT CAN MEET.** A window so large
 that its expiry cannot be computed was a traceback, exit 1; it is refused by
 name, exit 3, with nothing written -- and no maximum was added, so a window of
-years is accepted as before. The store reads an instant back in the SESSION's
+years is accepted as before. Nothing written holds at the module too, where
+the caller owns the transaction: the refusal comes before the customer's live
+token is superseded, not after. The store reads an instant back in the SESSION's
 TimeZone, not in UTC, so an expiry is refused too where a session the database
 accepts could not read it back: one at 9999-12-31T20:00Z was stored, and every
 later read of the row in a session east of UTC failed in the driver. A token on
@@ -29,6 +31,7 @@ reads standard input leniently and nothing raises at the read.
 Controls: the boundary's ``except Refused`` planted away; the window's
 overflow refusal planted away; the read-back margin planted away at each end;
 the range-naming detail planted back to "past the last instant"; the
+expiry planted back after the supersede, in each issue function; the
 not-text refusal on standard input planted away; the strict re-encoding of the
 line planted away.
 """
@@ -258,6 +261,88 @@ def test_a_window_too_large_to_compute_is_refused_by_name_exit_3_and_writes_noth
     status, out, err = run("5000000")
     assert status == 0, (out, err)
     assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(1,)]
+
+
+@pytest.mark.guarantee("G14")
+@store_test
+@pytest.mark.parametrize("kind", ["password reset", "email change"])
+def test_a_window_too_large_writes_nothing_at_the_module_so_the_live_token_stays_issued(
+    app, tenant_id, kind
+):
+    """At the module, where the caller owns the transaction: the refusal writes
+    nothing there either. The issue functions superseded the customer's live
+    token FIRST and computed the expiry after, so the refusal arrived with the
+    earlier token already 'cancelled', 'superseded' by one that was never issued,
+    in the caller's open transaction -- and a caller that trusted "nothing is
+    written" and committed left the emailed link dead. The command line rolls
+    back on a refusal, which is why the door-level tests above could not see it.
+    Here the earlier token still reads 'issued' after the refusal, in the same
+    transaction; after a commit it is still redeemed. The control: an ordinary
+    window -- five million minutes, still accepted -- does supersede it, read
+    the same way."""
+    from customer_account.store.postgres import tenant
+    from customer_account.store.records import (
+        confirm_email_change,
+        consume_password_reset,
+        set_password,
+        start_email_change,
+        start_password_reset,
+    )
+    from store_harness import ANOTHER_PASSWORD, LATER
+
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        set_password(cursor, tenant_id, customer_id, A_PASSWORD, by="o", at=CREATED_AT)
+    app.commit()
+    if kind == "password reset":
+        table, key = "credential_resets", "credential_reset"
+
+        def issue(cursor, minutes, at):
+            return start_password_reset(cursor, tenant_id, customer_id, valid_minutes=minutes,
+                                        by="o", at=at)
+
+        def redeem(cursor, token):
+            return consume_password_reset(cursor, tenant_id, token, ANOTHER_PASSWORD, at=LATER)
+    else:
+        table, key = "pending_email_changes", "pending_email_change"
+
+        def issue(cursor, minutes, at):
+            address = "alice.new@example.com" if at == CREATED_AT else "alice.next@example.com"
+            return start_email_change(cursor, tenant_id, customer_id, address,
+                                      valid_minutes=minutes, at=at, by="o")
+
+        def redeem(cursor, token):
+            return confirm_email_change(cursor, tenant_id, token, at=LATER)
+
+    def state_of(cursor, row_id):
+        cursor.execute(f"SELECT state, cancelled_reason FROM {table} WHERE id = %s", (row_id,))
+        return cursor.fetchone()
+
+    with tenant(app, tenant_id) as cursor:
+        first = issue(cursor, 120, CREATED_AT)
+    app.commit()
+
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as refused:
+            issue(cursor, 5_000_000_000, LATER)
+        assert refused.value.code == f.REFUSAL_VALID_MINUTES_TOO_LARGE
+        # Same transaction, before anything is committed or rolled back.
+        assert state_of(cursor, first[key]) == ("issued", None), kind
+        cursor.execute(f"SELECT count(*) FROM {table}")
+        assert cursor.fetchone() == (1,)
+    # The caller took "nothing is written" at its word.
+    app.commit()
+
+    # The control: the same read sees a supersede when one happens.
+    with tenant(app, tenant_id) as cursor:
+        issue(cursor, 5_000_000, LATER)
+        assert state_of(cursor, first[key]) == ("cancelled", "superseded")
+    app.rollback()
+
+    with tenant(app, tenant_id) as cursor:
+        redeem(cursor, first["token"])
+        assert state_of(cursor, first[key]) == ("redeemed", None)
+    app.commit()
 
 
 @pytest.mark.guarantee("G14")

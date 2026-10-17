@@ -600,10 +600,12 @@ def start_email_change(
         raise Refused(REFUSAL_EMAIL_UNCHANGED, "new_email", "it is the current address.")
     if holder is not None:
         raise Refused(REFUSAL_EMAIL_TAKEN, "new_email", "another customer carries this address.")
+    # The expiry's refusal comes BEFORE the first write: the live change must
+    # not be superseded by one that is never issued.
+    expires_at = expiry(when, minutes)
     superseded = _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,
                             by=authorised_by, at=when)
     minted = mint()
-    expires_at = expiry(when, minutes)
     cursor.execute(
         "INSERT INTO pending_email_changes (tenant_id, customer_id, new_email, token_sha256, "
         "authorisation, authorised_by, issued_at, expires_at, state) "
@@ -790,9 +792,11 @@ def start_password_reset(
     customer = load_customer(cursor, tenant_id, customer_id, lock=True)
     if load_credential(cursor, tenant_id, customer_id) is None:
         raise Refused(REFUSAL_NO_CREDENTIAL, "customer", "no password has been set to reset.")
+    # The expiry's refusal comes BEFORE the first write: the live reset must
+    # not be superseded by one that is never issued.
+    expires_at = expiry(when, minutes)
     superseded = _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id, by=who, at=when)
     minted = mint()
-    expires_at = expiry(when, minutes)
     cursor.execute(
         "INSERT INTO credential_resets (tenant_id, customer_id, token_sha256, issued_by, "
         "issued_at, expires_at, state) VALUES (%s, %s, %s, %s, %s, %s, 'issued') RETURNING id",
