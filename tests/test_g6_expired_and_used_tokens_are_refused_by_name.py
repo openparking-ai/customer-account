@@ -26,8 +26,16 @@ untouched. The tests below do what the schema says nobody can -- the OWNER
 drops the CHECK and writes the state -- because that is exactly the case
 the module's own guard is for; the CHECK is put back before they return.
 
+**AND A TOKEN IS NOT USED BEFORE IT EXISTED.** A token presented at an
+instant before its own ``issued_at`` is refused by name, both kinds, with the
+row untouched -- a clock that disagrees with the one that issued it, or a
+replay with an old instant -- and migration 0002 refuses the same row at the
+store: ``redeemed_at`` is never before ``issued_at``.
+
 Controls: the expiry derivation planted to never fire; the already-used
-branch planted to answer UNKNOWN; the parse of the read state planted away.
+branch planted to answer UNKNOWN; the parse of the read state planted away;
+the before-issue refusal planted away; each table's CHECK in 0002 planted to
+allow anything.
 """
 
 from __future__ import annotations
@@ -169,6 +177,58 @@ def test_a_superseded_token_is_cancelled_with_that_reason_and_the_newest_works(
 
 
 @pytest.mark.guarantee("G6")
+@pytest.mark.parametrize("kind,issue,spend", KINDS, ids=KIND_IDS)
+def test_a_token_presented_before_it_was_issued_is_refused_by_name_and_writes_nothing(
+    app, tenant_id, kind, issue, spend
+):
+    """OP-NODE-088: issued at +10 minutes, presented "at" +9 -- refused by
+    name, the row untouched; at the issue instant itself it spends."""
+    table = "pending_email_changes" if kind == "email change" else "credential_resets"
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        token = issue(cursor, tenant_id, customer_id, at=CREATED_AT + 10 * MINUTES)["token"]
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as refused:
+            spend(cursor, tenant_id, token, CREATED_AT + 9 * MINUTES)
+    app.rollback()
+    assert refused.value.code == f.REFUSAL_INSTANT_BEFORE_ISSUE
+    assert refused.value.field == "at"
+    assert token not in refused.value.detail
+    assert query(app, tenant_id, f"SELECT state, redeemed_at FROM {table} "
+                 "WHERE customer_id = %s", (str(customer_id),)) == [("issued", None)]
+    # THE OVER-REACH CONTROL: the issue instant is not before the issue
+    with tenant(app, tenant_id) as cursor:
+        spend(cursor, tenant_id, token, CREATED_AT + 10 * MINUTES)
+    app.rollback()
+
+
+@pytest.mark.guarantee("G6")
+@pytest.mark.parametrize("table", ["pending_email_changes", "credential_resets"])
+def test_the_store_refuses_a_redemption_dated_before_the_issue(owner, app, tenant_id, table):
+    """The schema's backstop for a raw write (migration 0002), as the OWNER:
+    a row cannot say it was redeemed before it was issued. The same write at
+    the issue instant is accepted -- the control that the CHECK is the rule
+    and not a refusal of every redemption."""
+    import psycopg
+
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        issue = _change if table == "pending_email_changes" else _reset
+        issue(cursor, tenant_id, customer_id, at=CREATED_AT + 10 * MINUTES)
+    app.commit()
+    write = (f"UPDATE {table} SET state = 'redeemed', redeemed_at = %s "
+             "WHERE customer_id = %s AND state = 'issued'")
+    with owner.cursor() as cursor:
+        with pytest.raises(psycopg.errors.CheckViolation) as refused:
+            cursor.execute(write, (CREATED_AT + 9 * MINUTES, str(customer_id)))
+    assert refused.value.diag.constraint_name == f"{table}_redeemed_not_before_issue"
+    with owner.cursor() as cursor:
+        cursor.execute(write, (CREATED_AT + 10 * MINUTES, str(customer_id)))
+        assert cursor.rowcount == 1
+
+
+@pytest.mark.guarantee("G6")
 def test_expiry_is_derived_and_expired_cannot_be_typed():
     assert is_expired(CREATED_AT, CREATED_AT) is True
     assert is_expired(CREATED_AT, CREATED_AT - MINUTES) is False
@@ -253,7 +313,7 @@ def test_the_command_line_refuses_a_typed_expired_state_exit_3(
 ):
     """The door as the operator meets it: exit 3, the JSON, the code."""
     from customer_account.cli import main
-    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app
+    from test_g3_no_plaintext_is_stored_or_rendered_twice import dsn_for_the_app, token_on_stdin
 
     dsn_for_the_app(monkeypatch)
     customer_id = _with_credential(app, tenant_id)
@@ -265,7 +325,8 @@ def test_the_command_line_refuses_a_typed_expired_state_exit_3(
         with owner.cursor() as cursor:
             cursor.execute("UPDATE credential_resets SET state = 'expired' WHERE customer_id = %s",
                            (str(customer_id),))
-        status = main(["consume-password-reset", "--tenant", str(tenant_id), "--token", token,
+        token_on_stdin(monkeypatch, token)
+        status = main(["consume-password-reset", "--tenant", str(tenant_id),
                        "--at", "2026-01-01T12:01:00+00:00"])
         out = capsys.readouterr()
         assert status == 3 and out.err == "", out

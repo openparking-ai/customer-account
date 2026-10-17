@@ -34,7 +34,9 @@ GUARANTEES: dict[str, str] = {
         "returned by nothing; a token is stored as its SHA-256 and returned exactly "
         "once, by the call that minted it -- not by a read, not by a refusal. The "
         "scan reads every column of every table in the catalogue, with the digest as "
-        "its positive control."
+        "its positive control. And the command line never takes a token as an "
+        "argument: the two doors presented one read it from standard input, because "
+        "an argument is visible in `ps` to every user on the machine."
     ),
     "G4": (
         "NO MONEY-SHAPED, CARD-SHAPED OR CHARGE-SHAPED FIELD EXISTS ANYWHERE IN THE "
@@ -54,6 +56,8 @@ GUARANTEES: dict[str, str] = {
         "An expired token and an already-used token are each refused BY NAME, "
         "distinctly from an unknown one and from a cancelled one. Expiry is derived "
         "from the stated expires_at against the instant given and is never typed; a "
+        "token presented at an instant before it was issued is refused by name, and the "
+        "store refuses a redemption dated before the issue; a "
         "token superseded by a newer one is cancelled with that reason; a spent token "
         "spends once, and the spend asserts one row. The state a door READS is parsed, "
         "not trusted: a row carrying 'expired', or any state this module does not have, "
@@ -76,13 +80,18 @@ GUARANTEES: dict[str, str] = {
         "history is read in ONE STATED ORDER -- published in this contract from the "
         "code that reads it, never written out here -- so two changes sharing an "
         "instant come back the same way on every read, ordered by the last column of "
-        "that order: deterministically, and ARBITRARILY, and the contract says so."
+        "that order: deterministically, and ARBITRARILY, and the contract says so. A "
+        "change confirmed at an instant before the change now in effect is refused by "
+        "name, so the latest row by changed_at is always the address in effect."
     ),
     "G9": (
         "A password reset is delivered to the customer's CURRENT address, read from "
         "the row at issue and never supplied by the caller: the command line has no "
         "option for it, and a pending, unconfirmed email change does not move it. A "
-        "reset resets a password that exists."
+        "reset resets a password that exists. And each recovery path closes the other: "
+        "a new password -- from set-password or from a consumed reset -- cancels the "
+        "customer's pending email changes, and a confirmed email change cancels the "
+        "resets issued to the old address, each with its reason."
     ),
     "G10": (
         "The email history, the terms acceptances and their channels are APPEND-ONLY "
@@ -129,8 +138,11 @@ GUARANTEES: dict[str, str] = {
         "The command line refuses, never tracebacks: every Refused reaches the "
         "boundary as {refused, field, detail} with exit 3; a machine that is not set "
         "up -- no DSN, a database that does not connect -- is one sentence on stderr "
-        "with exit 2; a malformed instant, an unreadable text file and a malformed "
-        "channel pair are each refused by name."
+        "with exit 2; a malformed instant, an unreadable text file, a malformed "
+        "channel pair, a token on standard input that is blank or not text (under "
+        "any locale, the C locale's lenient decoding included), and a token window "
+        "whose expiry cannot be computed or read back in every session time zone are "
+        "each refused by name."
     ),
     "G15": (
         "This module has no HTTP surface and sends nothing: no web framework, no HTTP "
