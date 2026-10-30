@@ -10,8 +10,13 @@ the command line printed since the test began is searched for each plaintext:
 a token appears in the ONE issue output, and nowhere else -- not in a read,
 not in a refusal; a password appears nowhere at all.
 
+**AND A TOKEN IS NEVER AN ARGUMENT.** The two doors that are presented a
+token read it from standard input; the parser has no option that could carry
+one, read from argparse itself.
+
 Controls: the password planted into a stored column; the presented token
-planted into the unknown-token refusal's detail.
+planted into the unknown-token refusal's detail; a ``--token`` option planted
+back onto the confirm door.
 """
 
 from __future__ import annotations
@@ -72,6 +77,15 @@ def dsn_for_the_app(monkeypatch):
         **{**params, "user": APP_ROLE, "password": APP_PASSWORD}))
 
 
+def token_on_stdin(monkeypatch, token: str) -> None:
+    """The token as an operator presents it: one line on standard input, never
+    an argument."""
+    import io
+    import sys
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{token}\n"))
+
+
 @pytest.mark.guarantee("G3")
 def test_the_plaintext_is_in_no_column_of_any_table_and_the_digest_is_the_control(
     app, owner, tenant_id
@@ -118,11 +132,13 @@ def test_the_token_is_rendered_by_the_issue_call_and_by_nothing_else_and_the_pas
     T = ["--tenant", str(tenant_id)]
     printed: list[tuple[str, str]] = []
 
-    def run(argv: list[str], password: str | None = None) -> dict:
+    def run(argv: list[str], password: str | None = None, token: str | None = None) -> dict:
         if password is None:
             monkeypatch.delenv("CUSTOMER_ACCOUNT_PASSWORD", raising=False)
         else:
             monkeypatch.setenv("CUSTOMER_ACCOUNT_PASSWORD", password)
+        if token is not None:
+            token_on_stdin(monkeypatch, token)
         status = main(argv)
         out = capsys.readouterr()
         printed.append((argv[0], out.out + out.err))
@@ -140,26 +156,25 @@ def test_the_token_is_rendered_by_the_issue_call_and_by_nothing_else_and_the_pas
     reset_token = json.loads(reset["printed"])["token"]
     # every door that could render it
     other = new_tenant(owner)
-    unknown_here = run(["confirm-email-change", "--tenant", str(other), "--token", token,
-                        "--at", at])
+    unknown_here = run(["confirm-email-change", "--tenant", str(other), "--at", at],
+                       token=token)
     assert '"REFUSAL_TOKEN_UNKNOWN"' in unknown_here["printed"]
-    expired = run(["confirm-email-change", *T, "--token", token, "--at",
-                   "2026-06-01T09:30:00-06:00"])
+    expired = run(["confirm-email-change", *T, "--at", "2026-06-01T09:30:00-06:00"],
+                  token=token)
     assert '"REFUSAL_TOKEN_EXPIRED"' in expired["printed"]
-    confirmed = run(["confirm-email-change", *T, "--token", token, "--at",
-                     "2026-06-01T09:10:00-06:00"])
+    confirmed = run(["confirm-email-change", *T, "--at", "2026-06-01T09:10:00-06:00"],
+                    token=token)
     assert confirmed["status"] == 0, confirmed
-    used = run(["confirm-email-change", *T, "--token", token, "--at",
-                "2026-06-01T09:11:00-06:00"])
+    used = run(["confirm-email-change", *T, "--at", "2026-06-01T09:11:00-06:00"], token=token)
     assert '"REFUSAL_TOKEN_ALREADY_USED"' in used["printed"]
     superseding = run(["start-password-reset", *T, "--customer", str(customer_id),
                        "--valid-minutes", "30", "--by", "owner", "--at", at])
     second_reset = json.loads(superseding["printed"])["token"]
-    cancelled = run(["consume-password-reset", *T, "--token", reset_token, "--at",
-                     "2026-06-01T09:05:00-06:00"], "a replacement passphrase")
+    cancelled = run(["consume-password-reset", *T, "--at", "2026-06-01T09:05:00-06:00"],
+                    "a replacement passphrase", token=reset_token)
     assert '"REFUSAL_TOKEN_CANCELLED"' in cancelled["printed"]
-    consumed = run(["consume-password-reset", *T, "--token", second_reset, "--at",
-                    "2026-06-01T09:05:00-06:00"], "a replacement passphrase")
+    consumed = run(["consume-password-reset", *T, "--at", "2026-06-01T09:05:00-06:00"],
+                   "a replacement passphrase", token=second_reset)
     assert consumed["status"] == 0, consumed
     wrong = run(["verify-password", *T, "--customer", str(customer_id)], A_PASSWORD)
     assert wrong["status"] == 1
@@ -197,3 +212,32 @@ def test_a_refusal_naming_a_token_does_not_echo_it(app, tenant_id):
     assert refused.value.code == f.REFUSAL_TOKEN_UNKNOWN
     assert "not-a-token" not in refused.value.detail
     assert "not-a-token" not in str(refused.value)
+
+
+@pytest.mark.guarantee("G3")
+def test_no_command_takes_a_token_as_an_argument_and_the_two_doors_say_where_it_is_read():
+    """OP-NODE-088: a token on the command line is in ``ps`` for every user on
+    the machine and in the shell's history -- the reason a password is never
+    an argument. Read from the parser, not from a list: no option of any
+    command can carry a token, and the two doors that are presented one say
+    it is read from standard input."""
+    from customer_account.cli import TOKEN_FROM, _parser
+
+    parser = _parser()
+    commands = {
+        name: sub for action in parser._actions
+        if hasattr(action, "choices") and isinstance(action.choices, dict)
+        for name, sub in action.choices.items()
+    }
+    options = {name: {opt for action in sub._actions for opt in action.option_strings}
+               for name, sub in commands.items()}
+    carrying = {name: sorted(opt for opt in opts if "token" in opt or "secret" in opt)
+                for name, opts in options.items()}
+    assert {name: opts for name, opts in carrying.items() if opts} == {}
+    # THE CONTROL on the scan: it reads the real option sets of the two doors
+    assert {"--tenant", "--at"} <= options["confirm-email-change"]
+    assert {"--tenant", "--at"} <= options["consume-password-reset"]
+    helps = {choice.dest: choice.help for action in parser._actions
+             if hasattr(action, "_choices_actions") for choice in action._choices_actions}
+    assert TOKEN_FROM in helps["confirm-email-change"]
+    assert TOKEN_FROM in helps["consume-password-reset"]

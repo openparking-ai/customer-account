@@ -14,10 +14,10 @@ pattern, and the standalone claim in one sentence.
     customer-account verify-password --tenant T --customer ID
     customer-account start-email-change --tenant T --customer ID --new-email b@example.com
         --valid-minutes M --at INSTANT [--by WHO]
-    customer-account confirm-email-change --tenant T --token TOKEN --at INSTANT
+    customer-account confirm-email-change --tenant T --at INSTANT    < the token
     customer-account start-password-reset --tenant T --customer ID --valid-minutes M
         --by WHO --at INSTANT
-    customer-account consume-password-reset --tenant T --token TOKEN --at INSTANT
+    customer-account consume-password-reset --tenant T --at INSTANT  < the token
 
 **A PASSWORD IS READ FROM THE ENVIRONMENT, NEVER FROM AN ARGUMENT**
 (``CUSTOMER_ACCOUNT_PASSWORD``): arguments are visible in ``ps`` to every user
@@ -33,6 +33,11 @@ ELSE.** ``start-email-change`` and ``start-password-reset`` print it, with
 for a reset -- read from the row, never accepted as an argument. This module
 sends nothing; delivering it is the caller's.
 
+**A TOKEN IS PRESENTED ON STANDARD INPUT, NEVER AS AN ARGUMENT**, for the
+reason a password is never one: ``confirm-email-change`` and
+``consume-password-reset`` read it as one line from standard input
+(``printf '%s\\n' "$TOKEN" | customer-account confirm-email-change ...``).
+
 Exit status: 0 done, or verified; 1 not verified (``verify-password`` only:
 a wrong password, or NO CREDENTIAL -- answered by name, and the JSON says
 that is not "no password required"); 2 the machine's configuration (a
@@ -44,8 +49,9 @@ raises reaches this boundary and is printed as ``{"refused": code, "field":
 ..., "detail": ...}`` with exit 3. What the libraries this boundary calls can
 raise is mapped here too: a text file that cannot be read (``_text_file``), an
 instant that does not parse or carries no offset (``_at``), a whole number
-that is not one. What the database driver raises that the module did not name
-is the machine's configuration: one sentence on stderr naming the SQLSTATE,
+that is not one, a token on standard input that is not text (``_token``).
+What the database driver raises that the module did not name is the
+machine's configuration: one sentence on stderr naming the SQLSTATE,
 exit 2 -- the LAST resort, after every named refusal has had its chance.
 """
 
@@ -74,6 +80,8 @@ from customer_account.identity import require_aware
 from customer_account.passwords import PASSWORD_ENV
 
 DSN_ENV = "CUSTOMER_ACCOUNT_DSN"
+#: Where a door that is presented a token reads it: never an argument.
+TOKEN_FROM = "standard input"
 EXIT_DONE = 0
 EXIT_NOT_VERIFIED = 1
 EXIT_CONFIGURATION = 2
@@ -159,9 +167,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--at", required=True)
     s.add_argument("--by", help="the caller's explicit authorisation, stored as such")
 
-    s = store("confirm-email-change", "the new address presents the token: the change takes "
-              "effect now")
-    s.add_argument("--token", required=True)
+    s = store("confirm-email-change", "the new address presents the token, one line on "
+              f"{TOKEN_FROM}: the change takes effect now")
     s.add_argument("--at", required=True)
 
     s = store("start-password-reset", "mint the token the CURRENT address receives; it resets "
@@ -172,9 +179,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--by", required=True, help="who issued it")
     s.add_argument("--at", required=True)
 
-    s = store("consume-password-reset", "present the reset token with the new password in "
-              f"{PASSWORD_ENV}")
-    s.add_argument("--token", required=True)
+    s = store("consume-password-reset", f"present the reset token, one line on {TOKEN_FROM}, "
+              f"with the new password in {PASSWORD_ENV}")
     s.add_argument("--at", required=True)
     return p
 
@@ -247,6 +253,31 @@ def _text_file(path: str | None, option: str) -> str | None:
         raise Refused(
             REFUSAL_DOCUMENT_UNREADABLE, option,
             f"{option} {path!r} could not be read: {exc}",
+        ) from None
+
+
+def _token() -> str:
+    """The token a door is presented: ONE LINE FROM STANDARD INPUT, never an
+    argument -- an argument is visible in ``ps`` to every user on the machine
+    and lands in the shell's history, which is why a password is read from the
+    environment. The line goes to the module as read; the module strips it and
+    refuses a blank by name. Input that is not text is refused here, by name,
+    and is never echoed.
+
+    **NOT TEXT IS JUDGED STRICTLY, WHATEVER THE LOCALE.** Under the C or POSIX
+    locale (LANG unset: containers, cron, systemd) and under ``PYTHONUTF8=1``,
+    Python reads standard input with ``errors='surrogateescape'``: bytes that
+    are not UTF-8 come back as lone surrogates and ``readline`` raises nothing.
+    Measured: such a line reached the digest, raised ``UnicodeEncodeError``
+    there, and the operator got a traceback and exit 1. So the line is encoded
+    back to UTF-8, strictly, before it leaves this function."""
+    try:
+        line = sys.stdin.readline() if sys.stdin is not None else ""
+        line.encode("utf-8")
+        return line
+    except (OSError, ValueError):
+        raise Refused(
+            REFUSAL_FIELD_BLANK, "token", f"the token on {TOKEN_FROM} could not be read as text."
         ) from None
 
 
@@ -428,7 +459,7 @@ def _run(args: argparse.Namespace) -> int:
                     at=_at(args.at), password=password, by=args.by,
                 )
             elif args.command == "confirm-email-change":
-                out = records.confirm_email_change(cursor, args.tenant, args.token,
+                out = records.confirm_email_change(cursor, args.tenant, _token(),
                                                    at=_at(args.at))
             elif args.command == "start-password-reset":
                 out = records.start_password_reset(
@@ -437,7 +468,7 @@ def _run(args: argparse.Namespace) -> int:
                     by=args.by, at=_at(args.at),
                 )
             elif args.command == "consume-password-reset":
-                out = records.consume_password_reset(cursor, args.tenant, args.token, password,
+                out = records.consume_password_reset(cursor, args.tenant, _token(), password,
                                                      at=_at(args.at))
             else:  # pragma: no cover - argparse refuses unknown commands
                 raise SystemExit(2)

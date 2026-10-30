@@ -139,6 +139,17 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "the unknown-token refusal echoes the token presented, so a token typed at "
         "the wrong tenant is rendered a second time, in a log line",
     ),
+    "G3/token-argv": (
+        "tests/test_g3_no_plaintext_is_stored_or_rendered_twice.py",
+        "cli.py",
+        '              f"{TOKEN_FROM}: the change takes effect now")',
+        source(
+            '              f"{TOKEN_FROM}: the change takes effect now")',
+            '    s.add_argument("--token")  # PLANTED: the token back on the command line',
+        ),
+        "the confirm door takes the token as an argument again, so it is in `ps` for every "
+        "user on the machine and in the shell's history; the parser scan must find it",
+    ),
     "G4/column": (
         "tests/test_g4_no_money_shaped_field_anywhere.py",
         "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
@@ -254,6 +265,43 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "a token presented twice reads as unknown the second time, so a replay is "
         "indistinguishable from a typo in the log",
     ),
+    "G6/before-issue": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "store/records.py",
+        "    if at < issued_at:",
+        "    if False:  # PLANTED: a token is spent at an instant before its issue",
+        "a token presented at an instant before it was issued is spent, so the record "
+        "says it was used before it existed -- the tests require the refusal by name and "
+        "an untouched row",
+    ),
+    "G6/redeemed-check-change": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "migrations/0002_a_token_is_not_redeemed_before_it_was_issued.sql",
+        source(
+            "  ADD CONSTRAINT pending_email_changes_redeemed_not_before_issue",
+            "  CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at);",
+        ),
+        source(
+            "  ADD CONSTRAINT pending_email_changes_redeemed_not_before_issue",
+            "  CHECK (true);  -- PLANTED: any redemption instant is accepted",
+        ),
+        "the store's backstop on pending email changes accepts a redemption dated before "
+        "the issue, so a raw write records one",
+    ),
+    "G6/redeemed-check-reset": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "migrations/0002_a_token_is_not_redeemed_before_it_was_issued.sql",
+        source(
+            "  ADD CONSTRAINT credential_resets_redeemed_not_before_issue",
+            "  CHECK (redeemed_at IS NULL OR redeemed_at >= issued_at);",
+        ),
+        source(
+            "  ADD CONSTRAINT credential_resets_redeemed_not_before_issue",
+            "  CHECK (true);  -- PLANTED: any redemption instant is accepted",
+        ),
+        "the store's backstop on password resets accepts a redemption dated before the "
+        "issue, so a raw write records one",
+    ),
     "G7/force": (
         "tests/test_g7_rls_from_migration_0001.py",
         "migrations/0001_tenants_customers_credentials_consent_and_rls.sql",
@@ -344,6 +392,14 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "the one tuple too, so eight changes confirmed in one transaction come back in "
         "heap order -- measured before this was built -- and the test requires id order",
     ),
+    "G8/before-latest": (
+        "tests/test_g8_an_email_change_takes_effect_only_when_confirmed.py",
+        "store/records.py",
+        "    if in_effect_since is not None and when < in_effect_since:",
+        "    if False:  # PLANTED: a change dated before the one in effect is written",
+        "a change confirmed at an instant before the change in effect takes effect, so the "
+        "history's latest row names an address that is not the current one",
+    ),
     "G9": (
         "tests/test_g9_a_reset_goes_to_the_current_address.py",
         "store/records.py",
@@ -358,6 +414,41 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "-- the plausible defect 'deliver to the latest address', and exactly the "
         "circular path: whoever started a change to an address they control receives "
         "the reset there",
+    ),
+    "G9/reset-cancels-change": (
+        "tests/test_g9_a_reset_goes_to_the_current_address.py",
+        "store/records.py",
+        source(
+            "    _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,",
+            '               by=f"credential_reset:{token_id}", at=when, reason=PASSWORD_SET)',
+        ),
+        "    pass  # PLANTED: a consumed reset leaves the pending email change live",
+        "a consumed reset no longer cancels the pending email change, so a change started "
+        "with a phished password survives the customer's reset and its confirmation takes "
+        "the account",
+    ),
+    "G9/set-cancels-change": (
+        "tests/test_g9_a_reset_goes_to_the_current_address.py",
+        "store/records.py",
+        source(
+            "    _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id, by=who, "
+            "at=when,",
+            "               reason=PASSWORD_SET)",
+        ),
+        "    pass  # PLANTED: set-password leaves the pending email change live",
+        "set-password no longer cancels the pending email change -- the same takeover "
+        "through the other door that sets a new password",
+    ),
+    "G9/change-cancels-reset": (
+        "tests/test_g9_a_reset_goes_to_the_current_address.py",
+        "store/records.py",
+        source(
+            "        _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id,",
+            '                   by=f"email_change:{change_id}", at=when, reason=EMAIL_CHANGED)',
+        ),
+        "        pass  # PLANTED: a confirmed change leaves the old address's reset live",
+        "a confirmed email change no longer cancels the reset delivered to the old address, "
+        "so whoever reads the old mailbox can still set the password",
     ),
     "G10": (
         "tests/test_g10_histories_are_append_only_by_grant.py",
@@ -490,6 +581,102 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "    except KeyboardInterrupt as refused:  # PLANTED: a Refused is no longer caught\n"
         "        print(json.dumps(_refusal(refused), indent=2))",
         "the boundary stops catching Refused, so every refusal is a traceback and exit 1",
+    ),
+    "G14/window": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        "    except OverflowError:",
+        "    except ZeroDivisionError:  # PLANTED: an overflowing window is a traceback again",
+        "a token window too large to compute raises OverflowError again, so the command "
+        "prints a traceback and exits 1 instead of the named refusal",
+    ),
+    "G14/stdin-not-text": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "cli.py",
+        source(
+            "    except (OSError, ValueError):",
+            "        raise Refused(",
+            '            REFUSAL_FIELD_BLANK, "token"',
+        ),
+        source(
+            "    except LookupError:  # PLANTED: unreadable input is a traceback again",
+            "        raise Refused(",
+            '            REFUSAL_FIELD_BLANK, "token"',
+        ),
+        "a token on standard input that is not text reaches the shell as a "
+        "UnicodeDecodeError traceback instead of the named refusal",
+    ),
+    "G14/stdin-strict": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "cli.py",
+        '        line.encode("utf-8")',
+        "        pass  # PLANTED: the line is not re-encoded strictly",
+        "under the C locale or PYTHONUTF8=1 the bytes that are not UTF-8 come back from "
+        "standard input as surrogates, reach the digest and raise there: a traceback and "
+        "exit 1 in a fresh interpreter, where the test runs the door",
+    ),
+    "G14/read-back-last": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        "LAST_READABLE = datetime.max.replace(tzinfo=UTC) - READ_BACK_MARGIN",
+        "LAST_READABLE = datetime.max.replace(tzinfo=UTC)  # PLANTED: judged in UTC only",
+        "an expiry at 9999-12-31T20:00Z is accepted and stored again, and a session at "
+        "Pacific/Kiritimati cannot read the row back: the next door to read it exits 2",
+    ),
+    "G14/read-back-first": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        "FIRST_READABLE = datetime.min.replace(tzinfo=UTC) + READ_BACK_MARGIN",
+        "FIRST_READABLE = datetime.min.replace(tzinfo=UTC)  # PLANTED: judged in UTC only",
+        "an expiry in the first hours of the year 1 is accepted again, and a session west "
+        "of UTC reads it as the year 0, which the driver cannot hold",
+    ),
+    "G14/window-detail": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        '            "expiry falls outside the instants this module can compute and read back in "',
+        '            "expiry is past the last instant this module can compute and read back in "'
+        "  # PLANTED",
+        "the refusal's detail says 'past the last instant' again, of a thirty-minute window "
+        "that overflowed at the start of the range",
+    ),
+    "G14/expiry-first-change": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "store/records.py",
+        source(
+            "    expires_at = expiry(when, minutes)",
+            "    superseded = _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,",
+            "                            by=authorised_by, at=when)",
+            "    minted = mint()",
+        ),
+        source(
+            "    superseded = _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,",
+            "                            by=authorised_by, at=when)",
+            "    minted = mint()",
+            "    expires_at = expiry(when, minutes)  # PLANTED: after the supersede again",
+        ),
+        "start_email_change cancels the customer's live change as 'superseded' before the "
+        "window is refused, so the caller's open transaction holds a write the refusal "
+        "says never happened, and a commit kills the emailed link",
+    ),
+    "G14/expiry-first-reset": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "store/records.py",
+        source(
+            "    expires_at = expiry(when, minutes)",
+            "    superseded = _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id, "
+            "by=who, at=when)",
+            "    minted = mint()",
+        ),
+        source(
+            "    superseded = _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id, "
+            "by=who, at=when)",
+            "    minted = mint()",
+            "    expires_at = expiry(when, minutes)  # PLANTED: after the supersede again",
+        ),
+        "start_password_reset cancels the customer's live reset as 'superseded' before the "
+        "window is refused, so the caller's open transaction holds a write the refusal "
+        "says never happened, and a commit kills the emailed link",
     ),
     "G15": (
         "tests/test_g15_no_http_surface_and_nothing_is_sent.py",
