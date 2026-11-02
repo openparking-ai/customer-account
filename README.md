@@ -85,8 +85,10 @@ dated before the change now in effect.
 
 **Each recovery path closes the other.** A new password -- set, or from a
 consumed reset -- cancels the customer's pending email change, so a change
-started by someone holding the old password does not survive it; a confirmed
-email change cancels the resets delivered to the old address. Each
+started by someone holding the old password does not survive it; a password
+set with `set-password` also cancels the customer's outstanding resets, so a
+reset minted to replace the old password cannot replace the new one; a
+confirmed email change cancels the resets delivered to the old address. Each
 cancellation is recorded with its reason and is refused by name if the token
 is presented afterwards.
 

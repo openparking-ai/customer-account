@@ -93,8 +93,9 @@ GUARANTEES: dict[str, str] = {
         "option for it, and a pending, unconfirmed email change does not move it. A "
         "reset resets a password that exists. And each recovery path closes the other: "
         "a new password -- from set-password or from a consumed reset -- cancels the "
-        "customer's pending email changes, and a confirmed email change cancels the "
-        "resets issued to the old address, each with its reason."
+        "customer's pending email changes, a password set through set-password "
+        "cancels the customer's outstanding resets, and a confirmed email change "
+        "cancels the resets issued to the old address, each with its reason."
     ),
     "G10": (
         "The email history, the terms acceptances and their channels are APPEND-ONLY "

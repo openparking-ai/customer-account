@@ -447,6 +447,17 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "set-password no longer cancels the pending email change -- the same takeover "
         "through the other door that sets a new password",
     ),
+    "G9/set-cancels-reset": (
+        "tests/test_g9_a_reset_goes_to_the_current_address.py",
+        "store/records.py",
+        source(
+            "    _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id, by=who, at=when,",
+            "               reason=PASSWORD_SET)",
+        ),
+        "    pass  # PLANTED: set-password leaves the outstanding reset live",
+        "set-password no longer cancels the outstanding reset, so whoever reads the mailbox "
+        "the reset went to can set the password over the one just chosen",
+    ),
     "G9/change-cancels-reset": (
         "tests/test_g9_a_reset_goes_to_the_current_address.py",
         "store/records.py",

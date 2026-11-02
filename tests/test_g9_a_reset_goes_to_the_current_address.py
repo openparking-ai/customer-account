@@ -17,13 +17,15 @@ replaces the credential, and the old password stops verifying.
 starts a change to an address they control; the customer then sets a new
 password. The pending change must not survive that, or its confirmation takes
 the account: a new password -- through set-password or a consumed reset --
-cancels it, with ``password_set`` as the reason. And a reset delivered to the
-OLD address stops working once a change to a new one is confirmed, with
+cancels it, with ``password_set`` as the reason. A password set through
+set-password cancels the customer's outstanding reset too, with the same
+reason: it was minted to replace the password just replaced. And a reset
+delivered to the OLD address stops working once a change to a new one is confirmed, with
 ``email_changed`` as the reason. Each test has its over-reach control: a token
 issued after the event still works.
 
 Controls: the delivery address planted to follow the pending change; each of
-the three cancellations planted away, one at a time.
+the four cancellations planted away, one at a time.
 """
 
 from __future__ import annotations
@@ -227,3 +229,39 @@ def test_a_confirmed_email_change_cancels_the_reset_sent_to_the_old_address(app,
                                at=CREATED_AT + 5 * MINUTE)
     app.rollback()
     assert later["deliver_to"] == NEW
+
+
+@pytest.mark.guarantee("G9")
+def test_set_password_cancels_the_outstanding_reset(app, tenant_id):
+    """OP-8-8: a reset is outstanding at the current address, then a new
+    password is set through set-password. The reset was minted to replace the
+    password that has just been replaced; left live, whoever reads that mailbox
+    can still set the password over the one just chosen. It is refused as
+    CANCELLED, by name, with ``password_set`` and who set the password on the
+    row, and the new password still verifies. A reset issued afterwards works."""
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        reset = start_password_reset(cursor, tenant_id, customer_id, valid_minutes=60,
+                                     by="support", at=CREATED_AT)
+        set_password(cursor, tenant_id, customer_id, ANOTHER_PASSWORD, by="the customer",
+                     at=CREATED_AT + MINUTE)
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as refused:
+            consume_password_reset(cursor, tenant_id, reset["token"], "someone else's choice",
+                                   at=CREATED_AT + 2 * MINUTE)
+    app.rollback()
+    assert refused.value.code == f.REFUSAL_TOKEN_CANCELLED
+    assert PASSWORD_SET in refused.value.detail
+    assert query(app, tenant_id, "SELECT state, cancelled_by, cancelled_reason, cancelled_at "
+                 "FROM credential_resets WHERE customer_id = %s", (str(customer_id),)) == [
+        ("cancelled", "the customer", PASSWORD_SET, CREATED_AT + MINUTE)]
+    with tenant(app, tenant_id) as cursor:
+        assert verify_password(cursor, tenant_id, customer_id,
+                               ANOTHER_PASSWORD).outcome == f.VERIFIED
+        # THE OVER-REACH CONTROL: a reset issued after the new password works
+        later = start_password_reset(cursor, tenant_id, customer_id, valid_minutes=60,
+                                     by="support", at=CREATED_AT + 3 * MINUTE)
+        consume_password_reset(cursor, tenant_id, later["token"], A_PASSWORD,
+                               at=CREATED_AT + 4 * MINUTE)
+    app.rollback()

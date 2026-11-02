@@ -29,7 +29,9 @@ cancelled, by name.
 **EACH RECOVERY PATH CLOSES THE OTHER.** A new password -- ``set_password``,
 or a consumed reset -- cancels the customer's issued email changes, with the
 reason ``password_set``: a change started by someone holding the old password
-must not survive the customer replacing it. A confirmed email change cancels
+must not survive the customer replacing it. ``set_password`` cancels the
+customer's issued resets too, with the same reason: a reset minted to replace
+the old password must not replace the new one. A confirmed email change cancels
 the customer's issued resets, with the reason ``email_changed``: a reset was
 delivered to the address that has just stopped being the address. Both run
 under the customer's lock, like every other write here.
@@ -119,7 +121,8 @@ LOCK_ORDER = ("customers", "pending_email_changes | credential_resets")
 
 #: Why an older token was cancelled when a newer one was issued.
 SUPERSEDED = "superseded"
-#: Why an email change was cancelled: the customer's password was set anew.
+#: Why an email change or a reset was cancelled: the customer's password was
+#: set anew.
 PASSWORD_SET = "password_set"
 #: Why a reset was cancelled: the address it was delivered to stopped being
 #: the customer's address.
@@ -473,14 +476,17 @@ def set_password(
 ) -> dict[str, Any]:
     """The caller says a credential exists now. ``by`` is stored: who decided
     a password should exist is a fact this module records and never infers.
-    A new password cancels the customer's issued email changes (``PASSWORD_SET``):
-    one started with the old password must not outlive it."""
+    A new password cancels the customer's issued email changes and issued
+    resets (``PASSWORD_SET``): a change started with the old password, or a
+    reset minted to replace it, must not outlive it."""
     tenant_id, customer_id = as_uuid(tenant_id), as_uuid(customer_id)
     who = require_text(by, "by")
     when = require_aware(at, "at")
     secret = require_password(password)
     load_customer(cursor, tenant_id, customer_id, lock=True)
     _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id, by=who, at=when,
+               reason=PASSWORD_SET)
+    _supersede(cursor, CREDENTIAL_RESETS, tenant_id, customer_id, by=who, at=when,
                reason=PASSWORD_SET)
     return _write_credential(cursor, tenant_id, customer_id, secret, by=who, at=when)
 
