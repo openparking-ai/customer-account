@@ -46,7 +46,8 @@ Controls: the expiry derivation planted to never fire; the already-used
 branch planted to answer UNKNOWN; the parse of the read state planted away;
 the before-issue refusal planted away; each table's CHECK in 0002 planted to
 allow anything; the skew refusal planted away; expiry judged against the
-instant given alone; the reset's spend recording the instant given.
+instant given alone; the reset's spend recording the instant given; the
+before-issue refusal judging the instant given alone, not the clock.
 """
 
 from __future__ import annotations
@@ -484,3 +485,34 @@ def test_a_redemption_is_recorded_at_the_database_clock_not_the_instant_given(
                               "WHERE customer_id = %s", (str(customer_id),))
     assert redeemed_at != stated
     assert before <= redeemed_at <= after, (before, redeemed_at, after)
+
+
+@pytest.mark.guarantee("G6")
+@pytest.mark.real_clock
+@pytest.mark.parametrize("kind,issue,spend", KINDS, ids=KIND_IDS)
+def test_a_token_presented_before_the_database_clock_reaches_its_issue_is_refused_by_name(
+    app, tenant_id, kind, issue, spend
+):
+    """OP-8-9: the spend records the database's clock, so the before-issue
+    refusal judges that clock as well as the instant given. A token issued
+    three minutes ahead and presented at its own issue instant -- inside the
+    skew -- passes a check on the instant given alone; recorded at the
+    database's clock, the spend would be dated before the issue, and
+    migration 0002 refuses that row: a raw CheckViolation for a reset, and
+    REFUSAL_CONSTRAINT for an email change. It is refused by name, before
+    anything is written."""
+    table = "pending_email_changes" if kind == "email change" else "credential_resets"
+    customer_id = _with_credential(app, tenant_id)
+    ahead = _database_clock(app) + 3 * MINUTES
+    with tenant(app, tenant_id) as cursor:
+        token = issue(cursor, tenant_id, customer_id, at=ahead)["token"]
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as refused:
+            spend(cursor, tenant_id, token, ahead)
+    app.rollback()
+    assert refused.value.code == f.REFUSAL_INSTANT_BEFORE_ISSUE, refused.value
+    assert refused.value.field == "at"
+    assert token not in refused.value.detail
+    assert query(app, tenant_id, f"SELECT state, redeemed_at FROM {table} "
+                 "WHERE customer_id = %s", (str(customer_id),)) == [("issued", None)]

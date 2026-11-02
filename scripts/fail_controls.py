@@ -274,6 +274,16 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "says it was used before it existed -- the tests require the refusal by name and "
         "an untouched row",
     ),
+    "G6/before-issue-clock": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "store/records.py",
+        "    if min(at, now) < issued_at:",
+        "    if at < issued_at:  # PLANTED: the database's clock is not judged",
+        "only the instant given is judged against the issue, so a token issued a few "
+        "minutes ahead and presented at its issue instant reaches the spend, which records "
+        "the database's clock: migration 0002 refuses the row -- a raw CheckViolation for a "
+        "reset and REFUSAL_CONSTRAINT for an email change, instead of the refusal by name",
+    ),
     "G6/clock-skew": (
         "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
         "store/records.py",
