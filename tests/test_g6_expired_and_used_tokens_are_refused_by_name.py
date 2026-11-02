@@ -3,9 +3,10 @@ distinctly from an unknown one and from a cancelled one.
 
 Four refusals, four codes, and a test for each pair that could be confused:
 a token nobody issued (UNKNOWN); one presented after its stated window
-(EXPIRED -- derived from ``expires_at`` against the instant given, and at the
-boundary instant itself); one presented twice (ALREADY_USED, the second
-time, and the first spend is what stands); one superseded by a newer token
+(EXPIRED -- derived from ``expires_at`` against the database's clock and the
+instant given, and at the boundary instant itself); one presented twice
+(ALREADY_USED, the second time, and the first spend is what stands); one
+superseded by a newer token
 for the same customer (CANCELLED, with ``superseded`` as the reason). The
 same four hold for both kinds of token, so both are driven.
 
@@ -32,10 +33,20 @@ row untouched -- a clock that disagrees with the one that issued it, or a
 replay with an old instant -- and migration 0002 refuses the same row at the
 store: ``redeemed_at`` is never before ``issued_at``.
 
+**AND THE CLOCK IS THE DATABASE'S** (OP-8-9). Expiry was judged only
+against the instant the caller typed, so a token whose window had ended spent
+when presented "at" an instant inside it, and ``redeemed_at`` was whatever
+was typed. The instant given must now be the database's clock within the
+module's skew, expiry is judged against the later of the two, and the spend
+records the clock. The suite's other tests state their instants, and the
+conftest makes the clock read those back; the tests marked ``real_clock``
+here judge against the database's own clock, unpatched.
+
 Controls: the expiry derivation planted to never fire; the already-used
 branch planted to answer UNKNOWN; the parse of the read state planted away;
 the before-issue refusal planted away; each table's CHECK in 0002 planted to
-allow anything.
+allow anything; the skew refusal planted away; expiry judged against the
+instant given alone; the reset's spend recording the instant given.
 """
 
 from __future__ import annotations
@@ -375,7 +386,7 @@ def test_the_spend_asserts_one_row_so_a_caller_that_skips_the_lock_still_refuses
             (str(tenant_id_), records.digest(token_)),
         )
         token_id, owner_id, expires_at = cursor.fetchone()
-        return records.as_uuid(token_id), records.as_uuid(owner_id), expires_at
+        return records.as_uuid(token_id), records.as_uuid(owner_id), expires_at, at
 
     monkeypatch.setattr(records, "_locked_token", blind)
     with tenant(app, tenant_id) as cursor:
@@ -384,3 +395,92 @@ def test_the_spend_asserts_one_row_so_a_caller_that_skips_the_lock_still_refuses
     assert refused.value.code == f.REFUSAL_TOKEN_ALREADY_USED
     assert "another caller" in refused.value.detail
     monkeypatch.setattr(records, "_locked_token", real)
+
+
+def _database_clock(app):
+    """The database's own clock, read the way the store reads it."""
+    with app.cursor() as cursor:
+        cursor.execute("SELECT clock_timestamp()")
+        (now,) = cursor.fetchone()
+    app.rollback()
+    return now
+
+
+@pytest.mark.guarantee("G6")
+@pytest.mark.real_clock
+@pytest.mark.parametrize("kind,issue,spend", KINDS, ids=KIND_IDS)
+def test_a_typed_instant_inside_the_window_does_not_revive_a_token_the_clock_says_is_expired(
+    app, tenant_id, kind, issue, spend
+):
+    """OP-8-9: expiry was judged only against the instant the caller typed, so
+    a token whose window ended ten minutes ago by the database's clock spent
+    when presented "at" an instant inside the window. Now the instant given
+    must be the database's now, within the stated skew, and expiry is judged
+    against the clock: an instant typed far from now is refused by name, and
+    so is a token the clock says is expired even when the instant given,
+    inside the skew, is not. Each writes nothing. The control: a live token
+    presented at now spends."""
+    table = "pending_email_changes" if kind == "email change" else "credential_resets"
+    customer_id = _with_credential(app, tenant_id)
+    now = _database_clock(app)
+    with tenant(app, tenant_id) as cursor:
+        # Window ended ten minutes ago; presented "at" five minutes into it.
+        typed = issue(cursor, tenant_id, customer_id, at=now - 40 * MINUTES)["token"]
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as refused:
+            spend(cursor, tenant_id, typed, now - 35 * MINUTES)
+    app.rollback()
+    assert refused.value.code == f.REFUSAL_INSTANT_NOT_NOW, refused.value
+    assert refused.value.field == "at"
+    assert typed not in refused.value.detail
+    assert query(app, tenant_id, f"SELECT state, redeemed_at FROM {table} "
+                 "WHERE customer_id = %s", (str(customer_id),)) == [("issued", None)]
+
+    with tenant(app, tenant_id) as cursor:
+        # Window ended two minutes ago; presented three minutes ago, inside the skew.
+        skewed = issue(cursor, tenant_id, customer_id, at=now - 32 * MINUTES)["token"]
+    app.commit()
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as refused:
+            spend(cursor, tenant_id, skewed, now - 3 * MINUTES)
+    app.rollback()
+    assert refused.value.code == f.REFUSAL_TOKEN_EXPIRED, refused.value
+    assert query(app, tenant_id, f"SELECT count(*) FROM {table} WHERE customer_id = %s "
+                 "AND state = 'issued'", (str(customer_id),)) == [(1,)]
+
+    # THE OVER-REACH CONTROL: a live token presented at the clock's now spends.
+    with tenant(app, tenant_id) as cursor:
+        live = issue(cursor, tenant_id, customer_id, at=now - MINUTES)["token"]
+        spend(cursor, tenant_id, live, _database_clock_in(cursor))
+    app.rollback()
+
+
+def _database_clock_in(cursor):
+    cursor.execute("SELECT clock_timestamp()")
+    return cursor.fetchone()[0]
+
+
+@pytest.mark.guarantee("G6")
+@pytest.mark.real_clock
+@pytest.mark.parametrize("kind,issue,spend", KINDS, ids=KIND_IDS)
+def test_a_redemption_is_recorded_at_the_database_clock_not_the_instant_given(
+    app, tenant_id, kind, issue, spend
+):
+    """OP-8-9: redeemed_at was the instant the caller typed. It is now the
+    database's clock at the spend: later than a clock reading taken before the
+    call, earlier than one taken after, and not the instant given, which sits
+    four minutes back inside the skew."""
+    table = "pending_email_changes" if kind == "email change" else "credential_resets"
+    customer_id = _with_credential(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        before = _database_clock_in(cursor)
+        token = issue(cursor, tenant_id, customer_id, at=before - 10 * MINUTES)["token"]
+        stated = before - 4 * MINUTES
+        spend(cursor, tenant_id, token, stated)
+        after = _database_clock_in(cursor)
+    app.commit()
+    ((redeemed_at,),) = query(app, tenant_id, f"SELECT redeemed_at FROM {table} "
+                              "WHERE customer_id = %s", (str(customer_id),))
+    assert redeemed_at != stated
+    assert before <= redeemed_at <= after, (before, redeemed_at, after)

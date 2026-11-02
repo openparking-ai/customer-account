@@ -36,6 +36,34 @@ _collected: dict[str, int] = {}
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "guarantee(id): proves a registered guarantee")
+    config.addinivalue_line(
+        "markers", "real_clock: judge tokens against the database's own clock, unpatched"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _the_database_clock_reads_the_instant_given(request, monkeypatch):
+    """A token is judged against the DATABASE'S clock (``records.database_now``),
+    within ``CLOCK_SKEW`` of the instant the caller gives. The suite states its
+    instants -- 2026-01-01 and minutes after it -- because a test that reads
+    the wall clock is a test whose answer depends on when it ran; so for every
+    test not marked ``real_clock``, the clock a token is judged against reads
+    back the instant given to that door, which is the rule the module had
+    before the clock was the database's. The tests marked ``real_clock`` judge
+    against the database's own clock, unpatched, and they are the ones that
+    hold the clock to its job; the command-line smoke in CI runs it unpatched
+    too."""
+    if request.node.get_closest_marker("real_clock"):
+        return
+    from customer_account.store import records
+
+    judged = records._locked_token
+
+    def at_the_instant_given(cursor, table, tenant_id, token, at):
+        monkeypatch.setattr(records, "database_now", lambda _cursor: at)
+        return judged(cursor, table, tenant_id, token, at)
+
+    monkeypatch.setattr(records, "_locked_token", at_the_instant_given)
 
 
 @pytest.hookimpl(hookwrapper=True)

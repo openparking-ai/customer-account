@@ -268,11 +268,35 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
     "G6/before-issue": (
         "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
         "store/records.py",
-        "    if at < issued_at:",
+        "    if min(at, now) < issued_at:",
         "    if False:  # PLANTED: a token is spent at an instant before its issue",
         "a token presented at an instant before it was issued is spent, so the record "
         "says it was used before it existed -- the tests require the refusal by name and "
         "an untouched row",
+    ),
+    "G6/clock-skew": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "store/records.py",
+        "    if abs(at - now) > CLOCK_SKEW:",
+        "    if False:  # PLANTED: any instant given is believed",
+        "an instant typed inside a window that ended ten minutes ago is believed again, "
+        "so the token the database's clock says is expired spends",
+    ),
+    "G6/clock-expiry": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "store/records.py",
+        "    if is_expired(expires_at, max(at, now)):",
+        "    if is_expired(expires_at, at):  # PLANTED: judged against the instant given",
+        "expiry is judged against the instant given alone again, so an instant inside the "
+        "skew and inside the window spends a token the database's clock says is expired",
+    ),
+    "G6/clock-redeemed": (
+        "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
+        "store/records.py",
+        "    _spend(cursor, CREDENTIAL_RESETS, tenant_id, token_id, now)",
+        "    _spend(cursor, CREDENTIAL_RESETS, tenant_id, token_id, when)  # PLANTED",
+        "a consumed reset records the instant the caller typed as redeemed_at again, not "
+        "the database's clock",
     ),
     "G6/redeemed-check-change": (
         "tests/test_g6_expired_and_used_tokens_are_refused_by_name.py",
@@ -600,6 +624,14 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
         "    except KeyboardInterrupt as refused:  # PLANTED: a Refused is no longer caught\n"
         "        print(json.dumps(_refusal(refused), indent=2))",
         "the boundary stops catching Refused, so every refusal is a traceback and exit 1",
+    ),
+    "G14/ceiling": (
+        "tests/test_g14_the_command_line_refuses_never_tracebacks.py",
+        "tokens.py",
+        "    if value > MAX_VALID_MINUTES:",
+        "    if False:  # PLANTED: no ceiling on the window",
+        "a reset or an email change can be issued to stay live for years again: a working "
+        "key left in a mailbox",
     ),
     "G14/window": (
         "tests/test_g14_the_command_line_refuses_never_tracebacks.py",

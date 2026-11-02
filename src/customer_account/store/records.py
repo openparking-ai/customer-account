@@ -36,13 +36,21 @@ the customer's issued resets, with the reason ``email_changed``: a reset was
 delivered to the address that has just stopped being the address. Both run
 under the customer's lock, like every other write here.
 
+**A TOKEN IS JUDGED AGAINST THE DATABASE'S CLOCK.** The caller states the
+instant a token is presented, and that instant is not trusted on its own: it
+must be the database's clock (``database_now``), within ``CLOCK_SKEW``, and
+expiry is judged against whichever of the two is later, so an instant typed
+inside a window that has passed cannot revive the token. The spend's
+``redeemed_at`` is the database's clock, not the instant given.
+
 **THE ORDER OF THE REFUSALS IS PART OF THE CONTRACT**, and every one writes
 nothing: the token (unknown; then, under the locks, already used; cancelled;
-expired -- derived from ``expires_at`` against the instant given; an instant
-before the token was issued); then what the spend would write (for an email
-change, an instant before the change now in effect; an address another
-customer took meanwhile). The first thing that fails is the refusal; nothing
-after it is evaluated.
+an instant given further from the database's clock than ``CLOCK_SKEW``;
+expired -- derived from ``expires_at`` against the later of that clock and the
+instant given; an instant, or a clock, before the token was issued); then what
+the spend would write (for an email change, an instant before the change now
+in effect; an address another customer took meanwhile). The first thing that
+fails is the refusal; nothing after it is evaluated.
 
 **NO EMAIL IS SENT.** This module has no network and no third-party service:
 it mints a token, records that it was issued, and names the address it is FOR
@@ -53,7 +61,7 @@ deliver it. It never accepts a delivery address for a reset.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -70,6 +78,7 @@ from customer_account.findings import (
     REFUSAL_EXTERNAL_ID_TAKEN,
     REFUSAL_INSTANT_BEFORE_ISSUE,
     REFUSAL_INSTANT_BEFORE_LATEST_CHANGE,
+    REFUSAL_INSTANT_NOT_NOW,
     REFUSAL_NO_CREDENTIAL,
     REFUSAL_PASSWORD_WRONG,
     REFUSAL_TENANT_NOT_FOUND,
@@ -130,6 +139,12 @@ EMAIL_CHANGED = "email_changed"
 
 PENDING_EMAIL_CHANGES = "pending_email_changes"
 CREDENTIAL_RESETS = "credential_resets"
+
+#: How far the instant a caller gives for presenting a token may be from the
+#: database's clock. Enough for a caller's clock that has drifted and a request
+#: that took a while to arrive; not enough to present a token "at" an instant
+#: inside a window that ended a while ago.
+CLOCK_SKEW = timedelta(minutes=5)
 
 #: THE TIEBREAK, WRITTEN ONCE. Every history this module reads oldest first
 #: ends in these two columns: ``created_at`` is the row's own clock, which
@@ -650,10 +665,23 @@ def _locate_token(cursor: Any, table: str, tenant_id: UUID, token: object) -> UU
     return as_uuid(row[0])
 
 
-def _locked_token(cursor: Any, table: str, tenant_id: UUID, token: str, at: datetime) -> tuple:
+def database_now(cursor: Any) -> datetime:
+    """The database's clock, read when it is asked -- ``clock_timestamp()``,
+    not the transaction's start, because a token is judged after the locks
+    are taken and a caller can hold a transaction open for as long as it
+    likes. The one clock a token is judged against."""
+    cursor.execute("SELECT clock_timestamp()")
+    (now,) = cursor.fetchone()
+    return now
+
+
+def _locked_token(
+    cursor: Any, table: str, tenant_id: UUID, token: str, at: datetime
+) -> tuple[UUID, UUID, datetime, datetime]:
     """The token row, locked and re-read under the customer lock, and judged:
-    already used, cancelled, expired, presented before it was issued -- each
-    by name, in that order."""
+    already used, cancelled, an instant given that is not the database's now,
+    expired, presented before it was issued -- each by name, in that order.
+    Returns the database's clock as well: it is the instant the spend records."""
     cursor.execute(
         f"SELECT id, customer_id, state, redeemed_at, cancelled_at, cancelled_reason, "
         f"issued_at, expires_at FROM {table} WHERE tenant_id = %s AND token_sha256 = %s "
@@ -679,24 +707,38 @@ def _locked_token(cursor: Any, table: str, tenant_id: UUID, token: str, at: date
             REFUSAL_TOKEN_CANCELLED, "token",
             f"cancelled at {cancelled_at.isoformat()}: {cancelled_reason}.",
         )
-    if is_expired(expires_at, at):
+    # THE CLOCK IS THE DATABASE'S. The instant given was the only thing expiry
+    # was judged against, so a token whose window had ended spent when it was
+    # presented "at" an instant inside the window.
+    now = database_now(cursor)
+    if abs(at - now) > CLOCK_SKEW:
+        raise Refused(
+            REFUSAL_INSTANT_NOT_NOW, "at",
+            f"the database's clock is {now.isoformat()}, and the instant given is "
+            f"{at.isoformat()}: more than {CLOCK_SKEW} apart.",
+        )
+    if is_expired(expires_at, max(at, now)):
         raise Refused(
             REFUSAL_TOKEN_EXPIRED, "token",
-            f"expires at {expires_at.isoformat()}, and it is {at.isoformat()}.",
+            f"expires at {expires_at.isoformat()}, and it is {now.isoformat()} by the "
+            f"database's clock (the instant given is {at.isoformat()}).",
         )
     # A redemption dated before its own issue is a clock that disagrees with
     # the one that issued it, or a replay; written, it would put the record
-    # out of order (migration 0002 refuses the same row at the store).
-    if at < issued_at:
+    # out of order (migration 0002 refuses the same row at the store). The
+    # spend records the database's clock, so that is judged too.
+    if min(at, now) < issued_at:
         raise Refused(
             REFUSAL_INSTANT_BEFORE_ISSUE, "at",
-            f"issued at {issued_at.isoformat()}, and the instant given is {at.isoformat()}.",
+            f"issued at {issued_at.isoformat()}, and the instant given is {at.isoformat()} "
+            f"(the database's clock is {now.isoformat()}).",
         )
-    return as_uuid(token_id), as_uuid(customer_id), expires_at
+    return as_uuid(token_id), as_uuid(customer_id), expires_at, now
 
 
 def _spend(cursor: Any, table: str, tenant_id: UUID, token_id: UUID, at: datetime) -> None:
-    """THE BACKSTOP: mark redeemed only from ``issued``, asserting one row."""
+    """THE BACKSTOP: mark redeemed only from ``issued``, asserting one row.
+    ``at`` is the database's clock from ``_locked_token``, never the caller's."""
     cursor.execute(
         f"UPDATE {table} SET state = 'redeemed', redeemed_at = %s "
         "WHERE tenant_id = %s AND id = %s AND state = 'issued'",
@@ -719,8 +761,8 @@ def confirm_email_change(
     presented = require_text(token, "token")
     customer_id = _locate_token(cursor, PENDING_EMAIL_CHANGES, tenant_id, presented)
     customer = load_customer(cursor, tenant_id, customer_id, lock=True)
-    token_id, _owner, _expires = _locked_token(cursor, PENDING_EMAIL_CHANGES, tenant_id,
-                                               presented, when)
+    token_id, _owner, _expires, now = _locked_token(cursor, PENDING_EMAIL_CHANGES, tenant_id,
+                                                    presented, when)
     cursor.execute(
         "SELECT new_email, authorisation, authorised_by FROM pending_email_changes "
         "WHERE tenant_id = %s AND id = %s",
@@ -751,7 +793,7 @@ def confirm_email_change(
     import psycopg
 
     try:
-        _spend(cursor, PENDING_EMAIL_CHANGES, tenant_id, token_id, when)
+        _spend(cursor, PENDING_EMAIL_CHANGES, tenant_id, token_id, now)
         cursor.execute(
             "UPDATE customers SET email = %s WHERE tenant_id = %s AND id = %s",
             (new_email, str(tenant_id), str(customer_id)),
@@ -835,9 +877,9 @@ def consume_password_reset(
     secret = require_password(password)
     customer_id = _locate_token(cursor, CREDENTIAL_RESETS, tenant_id, presented)
     load_customer(cursor, tenant_id, customer_id, lock=True)
-    token_id, _owner, _expires = _locked_token(cursor, CREDENTIAL_RESETS, tenant_id,
-                                               presented, when)
-    _spend(cursor, CREDENTIAL_RESETS, tenant_id, token_id, when)
+    token_id, _owner, _expires, now = _locked_token(cursor, CREDENTIAL_RESETS, tenant_id,
+                                                    presented, when)
+    _spend(cursor, CREDENTIAL_RESETS, tenant_id, token_id, now)
     _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id,
                by=f"credential_reset:{token_id}", at=when, reason=PASSWORD_SET)
     written = _write_credential(cursor, tenant_id, customer_id, secret,

@@ -13,9 +13,11 @@ call that minted it. Delivering it is the caller's.
 
 **EXPIRY IS DERIVED, NEVER TYPED.** A token carries ``expires_at``, stated at
 issue from a window the caller states in minutes (``require_valid_minutes``:
-no default, and no maximum -- only a window whose end cannot be computed, or
-read back in every session time zone, is refused, by name, in ``expiry``).
-"Expired" is ``expires_at`` against the instant asked about; the typed states
+no default, and at most ``MAX_VALID_MINUTES``; a window whose end cannot be
+computed, or read back in every session time zone, is refused too, by name, in
+``expiry``). "Expired" is ``expires_at`` against the instant asked about --
+which, when a token is presented, the store takes from the database's clock
+and not from the caller (``records.database_now``); the typed states
 are ``issued``, ``redeemed`` and ``cancelled``, the sibling module's
 vocabulary, and the migration's CHECK refuses anything else.
 """
@@ -86,9 +88,18 @@ def parse_state(name: object) -> TokenState:
         ) from None
 
 
+#: The longest window a token may be issued for: one day. A token is a key to
+#: the account for as long as it is live, and a reset or a change that waits
+#: longer than a day is better issued again than kept open. Without a ceiling a
+#: caller's typo -- or a caller asked for "a year" -- left a working key in a
+#: mailbox for as long as the instants could hold.
+MAX_VALID_MINUTES = 24 * 60
+
+
 def require_valid_minutes(value: object) -> int:
-    """A stated, positive whole number of minutes -- or a refusal by name.
-    ``None`` is refused as NOT STATED, never read as a default."""
+    """A stated, positive whole number of minutes, at most
+    ``MAX_VALID_MINUTES`` -- or a refusal by name. ``None`` is refused as NOT
+    STATED, never read as a default."""
     if value is None:
         raise Refused(
             REFUSAL_VALID_MINUTES_NOT_STATED, "valid_minutes", "valid_minutes is not stated."
@@ -101,6 +112,11 @@ def require_valid_minutes(value: object) -> int:
     if value <= 0:
         raise Refused(
             REFUSAL_VALID_MINUTES_NOT_POSITIVE, "valid_minutes", f"valid_minutes is {value}."
+        )
+    if value > MAX_VALID_MINUTES:
+        raise Refused(
+            REFUSAL_VALID_MINUTES_TOO_LARGE, "valid_minutes",
+            f"valid_minutes is {value}; the longest window is {MAX_VALID_MINUTES} minutes.",
         )
     return value
 
@@ -123,7 +139,8 @@ def expiry(issued_at: datetime, valid_minutes: int) -> datetime:
     not be computed was a traceback; one ending in the last hours of the year
     9999 was stored, and then every read of the row in a session east of UTC
     failed in the driver.
-    That is the only limit here; no maximum window is set."""
+    The window's ceiling is ``require_valid_minutes``'s; this judges the
+    instant, which is why it still holds for a short window near either end."""
     try:
         expires_at = issued_at + timedelta(minutes=valid_minutes)
         readable = FIRST_READABLE <= expires_at.astimezone(UTC) <= LAST_READABLE

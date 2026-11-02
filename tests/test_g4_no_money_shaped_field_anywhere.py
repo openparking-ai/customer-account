@@ -41,6 +41,7 @@ import pkgutil
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -128,8 +129,6 @@ COMMANDS_THE_OLD_LIST_DROVE = frozenset({
     "show-account", "show-acceptances",
 })
 
-AT = "2026-06-01T09:00:00-06:00"
-LATER_AT = "2026-06-01T09:05:00-06:00"
 
 #: A runner takes argv, the password to put in the environment (or None) and
 #: the token to present on standard input (or None), and returns (exit status,
@@ -149,6 +148,11 @@ def drive_every_command(run: Runner, tenant_id, terms_dir: Path) -> dict[str, di
     email_text.write_text("We will email you.")
     T = ["--tenant", str(tenant_id)]
     out: dict[str, dict] = {}
+    # Read from the wall clock at the drive, not fixed: a child process judges
+    # a token against the database's own clock, and the instant given for
+    # presenting one must be that clock within the module's skew.
+    now = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=2)
+    AT, LATER_AT = now.isoformat(), (now + timedelta(minutes=1)).isoformat()
 
     def done(command: str, argv: list[str], password: str | None = None,
              token: str | None = None) -> dict:
