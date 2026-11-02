@@ -168,7 +168,11 @@ jobs:
           python scripts/ensure-app-role.py "$OWNER_DSN"
           export CUSTOMER_ACCOUNT_DSN="host=localhost port=5432 dbname=customer_account_test user=customer_account_app password=$CUSTOMER_ACCOUNT_APP_PASSWORD"
           T="--tenant 00000000-0000-0000-0000-000000000001"
-          AT="--at 2026-06-01T09:00:00-06:00"
+          # The wall clock, not a fixed date: a token is judged against the
+          # database's clock, and the --at it is presented with must be that
+          # clock within the module's skew.
+          now() { date -u +%Y-%m-%dT%H:%M:%S+00:00; }
+          AT="--at $(now)"
           echo "Version 1 of the terms." > "$RUNNER_TEMP/terms.txt"
           echo "We will text you." > "$RUNNER_TEMP/sms.txt"
 
@@ -209,8 +213,8 @@ jobs:
           grep -q '"deliver_to": "holder@example.com"' "$RUNNER_TEMP/reset.txt"
           TOKEN=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['token'])" "$RUNNER_TEMP/reset.txt")
           printf '%s\n' "$TOKEN" | CUSTOMER_ACCOUNT_PASSWORD="a brand new passphrase" \
-            customer-account consume-password-reset $T --at 2026-06-01T09:10:00-06:00 | grep -q '"replaced"'
-          if printf '%s\n' "$TOKEN" | customer-account consume-password-reset $T --at 2026-06-01T09:11:00-06:00 \
+            customer-account consume-password-reset $T --at "$(now)" | grep -q '"replaced"'
+          if printf '%s\n' "$TOKEN" | customer-account consume-password-reset $T --at "$(now)" \
                | tee "$RUNNER_TEMP/used.txt"; then
             echo "a token was spent twice"; exit 1
           fi

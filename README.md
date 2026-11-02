@@ -83,10 +83,19 @@ cancelled and unknown are four refusals, by name; a token presented at an
 instant before it was issued is refused by name too, and so is an email change
 dated before the change now in effect.
 
+**A token is judged against the database's clock, not the caller's.** The
+`--at` given when a token is presented must be the database's clock within a
+few minutes, or it is refused by name; expiry is judged against that clock, so
+an instant typed inside a window that has passed does not revive the token;
+and the redemption is recorded at the database's clock. A window is at most one
+day: `--valid-minutes` over 1440 is refused by name.
+
 **Each recovery path closes the other.** A new password -- set, or from a
 consumed reset -- cancels the customer's pending email change, so a change
-started by someone holding the old password does not survive it; a confirmed
-email change cancels the resets delivered to the old address. Each
+started by someone holding the old password does not survive it; a password
+set with `set-password` also cancels the customer's outstanding resets, so a
+reset minted to replace the old password cannot replace the new one; a
+confirmed email change cancels the resets delivered to the old address. Each
 cancellation is recorded with its reason and is refused by name if the token
 is presented afterwards.
 

@@ -76,6 +76,7 @@ REFUSAL_TOKEN_ALREADY_USED = "REFUSAL_TOKEN_ALREADY_USED"
 REFUSAL_TOKEN_CANCELLED = "REFUSAL_TOKEN_CANCELLED"
 REFUSAL_TOKEN_EXPIRED = "REFUSAL_TOKEN_EXPIRED"
 REFUSAL_INSTANT_BEFORE_ISSUE = "REFUSAL_INSTANT_BEFORE_ISSUE"
+REFUSAL_INSTANT_NOT_NOW = "REFUSAL_INSTANT_NOT_NOW"
 REFUSAL_INSTANT_BEFORE_LATEST_CHANGE = "REFUSAL_INSTANT_BEFORE_LATEST_CHANGE"
 REFUSAL_EXPIRED_IS_DERIVED = "REFUSAL_EXPIRED_IS_DERIVED"
 REFUSAL_STATE_UNKNOWN = "REFUSAL_STATE_UNKNOWN"
@@ -190,11 +191,11 @@ REFUSALS: dict[str, str] = {
         "which it could be used. State a positive whole number of minutes."
     ),
     REFUSAL_VALID_MINUTES_TOO_LARGE: (
-        "The token's expiry -- the instant given plus the window -- falls outside the "
-        "instants this module can compute and read back in every session time zone the "
-        "database accepts; the detail names that range. Nothing is written; state a "
-        "smaller number of minutes. That is the only limit: no maximum window is set, "
-        "and the window is the caller's to state."
+        "The token's window is longer than the longest this module issues, one day, or "
+        "its expiry -- the instant given plus the window -- falls outside the instants "
+        "this module can compute and read back in every session time zone the database "
+        "accepts; the detail names which, with the ceiling or the range. Nothing is "
+        "written; state a smaller number of minutes."
     ),
     REFUSAL_TOKEN_UNKNOWN: (
         "No pending email change or password reset of this operator matches the "
@@ -213,14 +214,24 @@ REFUSALS: dict[str, str] = {
         "written."
     ),
     REFUSAL_TOKEN_EXPIRED: (
-        "This token's window has passed: the instant given is at or past its "
-        "expires_at. Derived; nobody typed it. Nothing is written; issue a new one."
+        "This token's window has passed: the database's clock, or the instant given, is "
+        "at or past its expires_at. Derived; nobody typed it. Nothing is written; issue "
+        "a new one."
     ),
     REFUSAL_INSTANT_BEFORE_ISSUE: (
-        "The instant given is before this token was issued. A token cannot be used "
+        "The instant given, or the database's clock, is before this token was issued. "
+        "A token cannot be used "
         "before it existed: a confirmation or a reset dated earlier than its own issue "
         "would be written into the record out of order. The detail names both instants. "
         "Nothing is written; check the clock that stated the instant."
+    ),
+    REFUSAL_INSTANT_NOT_NOW: (
+        "The instant given for presenting this token is further from the database's "
+        "clock than the skew this module allows; the detail names both instants and the "
+        "skew. A token is judged against the database's clock, not against an instant a "
+        "caller types, so an instant typed inside a window that has passed cannot revive "
+        "the token. Nothing is written; present it again with the current instant, or "
+        "check the clock that stated it."
     ),
     REFUSAL_INSTANT_BEFORE_LATEST_CHANGE: (
         "The instant given for this email change is before the change now in effect "

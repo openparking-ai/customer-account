@@ -182,8 +182,10 @@ def test_a_refusal_from_the_store_is_the_same_json_shape_and_writes_nothing(
 def test_a_window_whose_end_cannot_be_computed_is_refused_by_name_and_a_long_one_is_not():
     """OP-NODE-088, at the function the doors share: an expiry that cannot be
     computed, or that a session the database accepts could not read back, is
-    refused by name; a window of about nine and a half years is an instant like
-    any other -- no maximum was added."""
+    refused by name. ``expiry`` judges the instant and nothing else: the
+    window's ceiling is ``require_valid_minutes``'s (OP-8-9, the test after
+    this one), so a long window still computes here, and a thirty-minute one
+    near either end is still refused here."""
     from datetime import UTC, datetime, timedelta, timezone
 
     from customer_account.tokens import FIRST_READABLE, LAST_READABLE, expiry
@@ -223,14 +225,33 @@ def test_a_window_whose_end_cannot_be_computed_is_refused_by_name_and_a_long_one
 
 
 @pytest.mark.guarantee("G14")
+def test_a_window_longer_than_one_day_is_refused_by_name_and_one_day_is_not():
+    """OP-8-9: no ceiling was set on the window, so a reset or an email change
+    could be issued to stay live for years -- a working key left in a mailbox.
+    A window over one day is refused by name, with the ceiling in the detail;
+    one day exactly is a window like any other."""
+    from customer_account.tokens import MAX_VALID_MINUTES, require_valid_minutes
+
+    one_day = 24 * 60
+    for minutes in (one_day + 1, 5_000_000, 10**20):
+        with pytest.raises(f.Refused) as refused:
+            require_valid_minutes(minutes)
+        assert refused.value.code == f.REFUSAL_VALID_MINUTES_TOO_LARGE, minutes
+        assert refused.value.field == "valid_minutes"
+        assert f"{one_day} minutes" in refused.value.detail
+    assert require_valid_minutes(one_day) == one_day
+    assert MAX_VALID_MINUTES == one_day
+
+
+@pytest.mark.guarantee("G14")
 @store_test
 @pytest.mark.parametrize("command", ["start-password-reset", "start-email-change"])
 def test_a_window_too_large_to_compute_is_refused_by_name_exit_3_and_writes_nothing(
     app, tenant_id, capsys, monkeypatch, command
 ):
     """The door as the operator meets it: five billion minutes was a traceback
-    and exit 1; now exit 3, the JSON, nothing written. Five million minutes is
-    still accepted, as before."""
+    and exit 1; now exit 3, the JSON, nothing written -- refused by the
+    one-day ceiling (OP-8-9), and so is five million. One day is accepted."""
     from customer_account.cli import main
     from customer_account.store.postgres import tenant
     from customer_account.store.records import set_password
@@ -252,13 +273,14 @@ def test_a_window_too_large_to_compute_is_refused_by_name_exit_3_and_writes_noth
                            "--valid-minutes", minutes, *extra,
                            "--at", "2026-06-01T09:00:00-06:00"], capsys)
 
-    status, out, err = run("5000000000")
-    assert status == 3 and err == "" and "Traceback" not in out, (status, out, err)
-    printed = json.loads(out)
-    assert printed["refused"] == f.REFUSAL_VALID_MINUTES_TOO_LARGE, printed
-    assert printed["field"] == "valid_minutes"
-    assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(0,)]
-    status, out, err = run("5000000")
+    for minutes in ("5000000000", "5000000", "1441"):
+        status, out, err = run(minutes)
+        assert status == 3 and err == "" and "Traceback" not in out, (status, out, err)
+        printed = json.loads(out)
+        assert printed["refused"] == f.REFUSAL_VALID_MINUTES_TOO_LARGE, printed
+        assert printed["field"] == "valid_minutes"
+        assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(0,)]
+    status, out, err = run("1440")
     assert status == 0, (out, err)
     assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(1,)]
 
@@ -278,8 +300,8 @@ def test_a_window_too_large_writes_nothing_at_the_module_so_the_live_token_stays
     back on a refusal, which is why the door-level tests above could not see it.
     Here the earlier token still reads 'issued' after the refusal, in the same
     transaction; after a commit it is still redeemed. The control: an ordinary
-    window -- five million minutes, still accepted -- does supersede it, read
-    the same way."""
+    window -- one day, the longest accepted -- does supersede it, read the same
+    way."""
     from customer_account.store.postgres import tenant
     from customer_account.store.records import (
         confirm_email_change,
@@ -322,20 +344,28 @@ def test_a_window_too_large_writes_nothing_at_the_module_so_the_live_token_stays
         first = issue(cursor, 120, CREATED_AT)
     app.commit()
 
-    with tenant(app, tenant_id) as cursor:
-        with pytest.raises(f.Refused) as refused:
-            issue(cursor, 5_000_000_000, LATER)
-        assert refused.value.code == f.REFUSAL_VALID_MINUTES_TOO_LARGE
-        # Same transaction, before anything is committed or rolled back.
-        assert state_of(cursor, first[key]) == ("issued", None), kind
-        cursor.execute(f"SELECT count(*) FROM {table}")
-        assert cursor.fetchone() == (1,)
-    # The caller took "nothing is written" at its word.
-    app.commit()
+    from datetime import timedelta
+
+    from customer_account.tokens import LAST_READABLE
+
+    # Two ways to be too large: over the one-day ceiling, refused before the
+    # customer is read; and a short window whose end cannot be read back,
+    # refused by ``expiry`` -- the one that must come before the supersede.
+    for minutes, at in ((5_000_000_000, LATER), (30, LAST_READABLE - timedelta(minutes=29))):
+        with tenant(app, tenant_id) as cursor:
+            with pytest.raises(f.Refused) as refused:
+                issue(cursor, minutes, at)
+            assert refused.value.code == f.REFUSAL_VALID_MINUTES_TOO_LARGE
+            # Same transaction, before anything is committed or rolled back.
+            assert state_of(cursor, first[key]) == ("issued", None), (kind, minutes)
+            cursor.execute(f"SELECT count(*) FROM {table}")
+            assert cursor.fetchone() == (1,)
+        # The caller took "nothing is written" at its word.
+        app.commit()
 
     # The control: the same read sees a supersede when one happens.
     with tenant(app, tenant_id) as cursor:
-        issue(cursor, 5_000_000, LATER)
+        issue(cursor, 1440, LATER)
         assert state_of(cursor, first[key]) == ("cancelled", "superseded")
     app.rollback()
 
@@ -391,8 +421,9 @@ def test_an_expiry_a_session_east_of_utc_cannot_read_back_is_refused_exit_3_and_
     9999-12-31T20:00Z. It was accepted, exit 0, and the next read of the row
     in that session -- consume-password-reset, or show-account with the change
     pending -- exited 2 with a sentence blaming the database. Now it is refused
-    by name, exit 3, with nothing written; five million minutes is accepted in
-    the same session, and the account then reads back."""
+    by name, exit 3, with nothing written -- the reported window by the one-day
+    ceiling, and the same expiry reached in thirty minutes by ``expiry``; one
+    day is accepted in the same session, and the account then reads back."""
     import os
 
     from psycopg import conninfo
@@ -417,17 +448,22 @@ def test_an_expiry_a_session_east_of_utc_cannot_read_back_is_refused_exit_3_and_
                              if command == "start-email-change" else [])
     T = ["--tenant", str(tenant_id), "--customer", str(customer_id)]
 
-    def run(minutes: str):
-        return _run(main, [command, *T, "--valid-minutes", minutes, *extra,
-                           "--at", "2026-06-01T09:00:00-06:00"], capsys)
+    def run(minutes: str, at: str = "2026-06-01T09:00:00-06:00"):
+        return _run(main, [command, *T, "--valid-minutes", minutes, *extra, "--at", at],
+                    capsys)
 
-    status, out, err = run("4193699340")
-    assert status == 3 and err == "" and "Traceback" not in out, (status, out, err)
-    printed = json.loads(out)
-    assert printed["refused"] == f.REFUSAL_VALID_MINUTES_TOO_LARGE, printed
-    assert printed["field"] == "valid_minutes"
-    assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(0,)]
-    status, out, err = run("5000000")
+    # The reported window is now over the one-day ceiling (OP-8-9); the same
+    # expiry, 9999-12-31T20:00Z, reached with a thirty-minute window, is the
+    # case ``expiry`` itself still refuses.
+    for minutes, at in (("4193699340", "2026-06-01T09:00:00-06:00"),
+                        ("30", "9999-12-31T19:30:00+00:00")):
+        status, out, err = run(minutes, at)
+        assert status == 3 and err == "" and "Traceback" not in out, (status, out, err)
+        printed = json.loads(out)
+        assert printed["refused"] == f.REFUSAL_VALID_MINUTES_TOO_LARGE, printed
+        assert printed["field"] == "valid_minutes"
+        assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(0,)]
+    status, out, err = run("1440")
     assert status == 0, (out, err)
     assert query(app, tenant_id, f"SELECT count(*) FROM {table}") == [(1,)]
     status, out, err = _run(main, ["show-account", *T], capsys)

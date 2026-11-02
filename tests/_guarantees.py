@@ -55,9 +55,13 @@ GUARANTEES: dict[str, str] = {
     "G6": (
         "An expired token and an already-used token are each refused BY NAME, "
         "distinctly from an unknown one and from a cancelled one. Expiry is derived "
-        "from the stated expires_at against the instant given and is never typed; a "
-        "token presented at an instant before it was issued is refused by name, and the "
-        "store refuses a redemption dated before the issue; a "
+        "from the stated expires_at and is never typed, and it is judged against the "
+        "DATABASE'S CLOCK: the instant a caller gives for presenting a token must be "
+        "that clock within a stated skew, or it is refused by name, so an instant typed "
+        "inside a window that has passed cannot revive the token; the redemption is "
+        "recorded at the database's clock. A token presented at an instant before it "
+        "was issued is refused by name, and the store refuses a redemption dated before "
+        "the issue; a "
         "token superseded by a newer one is cancelled with that reason; a spent token "
         "spends once, and the spend asserts one row. The state a door READS is parsed, "
         "not trusted: a row carrying 'expired', or any state this module does not have, "
@@ -93,8 +97,9 @@ GUARANTEES: dict[str, str] = {
         "option for it, and a pending, unconfirmed email change does not move it. A "
         "reset resets a password that exists. And each recovery path closes the other: "
         "a new password -- from set-password or from a consumed reset -- cancels the "
-        "customer's pending email changes, and a confirmed email change cancels the "
-        "resets issued to the old address, each with its reason."
+        "customer's pending email changes, a password set through set-password "
+        "cancels the customer's outstanding resets, and a confirmed email change "
+        "cancels the resets issued to the old address, each with its reason."
     ),
     "G10": (
         "The email history, the terms acceptances and their channels are APPEND-ONLY "
@@ -143,9 +148,9 @@ GUARANTEES: dict[str, str] = {
         "up -- no DSN, a database that does not connect -- is one sentence on stderr "
         "with exit 2; a malformed instant, an unreadable text file, a malformed "
         "channel pair, a token on standard input that is blank or not text (under "
-        "any locale, the C locale's lenient decoding included), and a token window "
-        "whose expiry cannot be computed or read back in every session time zone are "
-        "each refused by name."
+        "any locale, the C locale's lenient decoding included), a token window longer "
+        "than one day, and a token window whose expiry cannot be computed or read back "
+        "in every session time zone are each refused by name."
     ),
     "G15": (
         "This module has no HTTP surface and sends nothing: no web framework, no HTTP "
