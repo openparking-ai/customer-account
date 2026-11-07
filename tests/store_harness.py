@@ -45,8 +45,8 @@ MIGRATION_LOCK_KEY = 0x63757374616363  # 'custacc', as a bigint
 CREATED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 LATER = CREATED_AT + timedelta(hours=1)
 #: A password that clears the minimum; used by every test that sets one.
-A_PASSWORD = "correct horse battery"
-ANOTHER_PASSWORD = "a different passphrase"
+A_PASSWORD = "Correct-horse-battery-1"
+ANOTHER_PASSWORD = "A-different-passphrase-2"
 
 TERMS_V1 = "Version 1 of the terms. You agree to be contacted about your parking."
 EMAIL_SHOWN = "We will email you receipts and notices about your parking."

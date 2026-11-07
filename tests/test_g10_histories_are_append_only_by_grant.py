@@ -99,7 +99,7 @@ def test_the_module_replaces_a_credential_by_update_never_by_delete_and_insert(
     app.commit()
     (before,) = query(app, tenant_id, "SELECT id FROM customer_credentials")[0]
     with tenant(app, tenant_id) as cursor:
-        set_password(cursor, tenant_id, customer_id, "a second passphrase", by="o",
+        set_password(cursor, tenant_id, customer_id, "A-second-passphrase-2", by="o",
                      at=CREATED_AT)
     app.commit()
     assert query(app, tenant_id, "SELECT id FROM customer_credentials") == [(before,)]

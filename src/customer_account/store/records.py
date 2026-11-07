@@ -93,6 +93,7 @@ from customer_account.passwords import (
     Credential,
     ScryptParameters,
     hash_password,
+    require_new_password,
     require_password,
     verify,
 )
@@ -478,7 +479,7 @@ def set_password(
     tenant_id, customer_id = as_uuid(tenant_id), as_uuid(customer_id)
     who = require_text(by, "by")
     when = require_aware(at, "at")
-    secret = require_password(password)
+    secret = require_new_password(password)
     load_customer(cursor, tenant_id, customer_id, lock=True)
     _supersede(cursor, PENDING_EMAIL_CHANGES, tenant_id, customer_id, by=who, at=when,
                reason=PASSWORD_SET)
@@ -826,7 +827,7 @@ def consume_password_reset(
     tenant_id = as_uuid(tenant_id)
     when = require_aware(at, "at")
     presented = require_text(token, "token")
-    secret = require_password(password)
+    secret = require_new_password(password)
     customer_id = _locate_token(cursor, CREDENTIAL_RESETS, tenant_id, presented)
     load_customer(cursor, tenant_id, customer_id, lock=True)
     token_id, _owner, _expires = _locked_token(cursor, CREDENTIAL_RESETS, tenant_id,

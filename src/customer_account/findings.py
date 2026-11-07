@@ -63,7 +63,7 @@ REFUSAL_TERMS_TEXT_BLANK = "REFUSAL_TERMS_TEXT_BLANK"
 REFUSAL_CHANNEL_UNKNOWN = "REFUSAL_CHANNEL_UNKNOWN"
 REFUSAL_CHANNEL_REPEATED = "REFUSAL_CHANNEL_REPEATED"
 REFUSAL_PASSWORD_NOT_GIVEN = "REFUSAL_PASSWORD_NOT_GIVEN"
-REFUSAL_PASSWORD_TOO_SHORT = "REFUSAL_PASSWORD_TOO_SHORT"
+REFUSAL_PASSWORD_RULE = "REFUSAL_PASSWORD_RULE"
 REFUSAL_PASSWORD_WRONG = "REFUSAL_PASSWORD_WRONG"
 REFUSAL_NO_CREDENTIAL = "REFUSAL_NO_CREDENTIAL"
 REFUSAL_AUTHORISATION_MISSING = "REFUSAL_AUTHORISATION_MISSING"
@@ -152,10 +152,11 @@ REFUSALS: dict[str, str] = {
         "to every user on the machine, and a password on a command line is a "
         "password in the shell's history."
     ),
-    REFUSAL_PASSWORD_TOO_SHORT: (
-        "The password is shorter than the minimum this module states. There is no "
-        "other rule -- no character classes, no dictionary -- because length is the "
-        "only rule that measurably helps and the others measurably hurt."
+    REFUSAL_PASSWORD_RULE: (
+        "A new password must be 8 to 72 characters, with at least one capital letter, "
+        "one number and one symbol. The detail names what is missing and never the "
+        "password. Only setting a password is refused: one set under an older rule "
+        "is still checked, and nobody is asked to change it."
     ),
     REFUSAL_PASSWORD_WRONG: (
         "The password given does not match the customer's credential. Compared in "

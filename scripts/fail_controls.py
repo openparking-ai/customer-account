@@ -556,7 +556,7 @@ CONTROLS: dict[str, tuple[str, str, str, str, str]] = {
     "G12/minimum": (
         "tests/test_g12_the_password_is_scrypt_with_stated_parameters.py",
         "passwords.py",
-        '    if len(value.encode("utf-8")) < MIN_PASSWORD_BYTES:',
+        '    if len(password.encode("utf-16-le", "surrogatepass")) // 2 < MIN_PASSWORD_LENGTH:',
         "    if False:  # PLANTED: no minimum",
         "the minimum length stops being enforced, so a one-character password is "
         "hashed and stored",

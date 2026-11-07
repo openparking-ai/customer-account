@@ -24,22 +24,26 @@ requires it to verify.
 **THE COMPARISON IS CONSTANT-TIME** (``hmac.compare_digest``), so a wrong
 password takes as long to refuse as a right one takes to accept, byte for byte.
 
-**ONE RULE ON THE PASSWORD ITSELF: A MINIMUM LENGTH**, stated below, and no
-other. Character classes and dictionaries measurably hurt what they are meant
-to help; length is the rule that measurably helps.
+**THE RULE ON A PASSWORD IS ONE RULE ACROSS EVERY PRODUCT**, stated below: 8 to
+72 characters, with a capital letter, a number and a symbol. It applies only
+when a password is SET (``require_new_password``). A password set under the old
+rule (at least 12 bytes, nothing else) still works: checking a password
+(``require_password``) asks only that one was given, and nobody is asked to
+change one.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 from dataclasses import dataclass
 
 from customer_account.findings import (
     REFUSAL_KDF_UNKNOWN,
     REFUSAL_PASSWORD_NOT_GIVEN,
-    REFUSAL_PASSWORD_TOO_SHORT,
+    REFUSAL_PASSWORD_RULE,
     Refused,
 )
 
@@ -66,9 +70,13 @@ class ScryptParameters:
 #: paper holds them at; dklen=64.
 SCRYPT = ScryptParameters(n=2**17, r=8, p=1, dklen=64)
 
-#: The one rule on a password. Bytes of UTF-8, not characters -- the thing the
-#: KDF actually receives.
-MIN_PASSWORD_BYTES = 12
+#: The rule on a new password. The shortest is counted in UTF-16 code units, so
+#: an emoji is 2, and the longest in bytes of UTF-8, as every product counts them.
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_BYTES = 72
+CAPITAL = re.compile(r"[A-Z]")
+NUMBER = re.compile(r"[0-9]")
+SYMBOL = re.compile(r"""[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?]""")
 
 #: 16 bytes from the CSPRNG per hash, hex-encoded in the row.
 SALT_BYTES = 16
@@ -88,8 +96,9 @@ class Credential:
 
 
 def require_password(value: object, source: str = PASSWORD_ENV) -> str:
-    """A password of at least MIN_PASSWORD_BYTES bytes, or a refusal by name.
-    ``source`` is where it was read from, for the refusal's field."""
+    """A password that was given, or a refusal by name. This is all that
+    CHECKING a password asks: one set under an older rule must still be
+    compared. ``source`` is where it was read from, for the refusal's field."""
     if value is None or value == "":
         raise Refused(
             REFUSAL_PASSWORD_NOT_GIVEN, source,
@@ -97,12 +106,38 @@ def require_password(value: object, source: str = PASSWORD_ENV) -> str:
         )
     if not isinstance(value, str):
         raise Refused(REFUSAL_PASSWORD_NOT_GIVEN, source, f"{source} must be text.")
-    if len(value.encode("utf-8")) < MIN_PASSWORD_BYTES:
-        raise Refused(
-            REFUSAL_PASSWORD_TOO_SHORT, source,
-            f"the password is shorter than {MIN_PASSWORD_BYTES} bytes.",
-        )
     return value
+
+
+def password_missing(password: str) -> list[str]:
+    """What a new password still lacks; empty when it may be set. Never the
+    password itself."""
+    missing = []
+    if len(password.encode("utf-16-le", "surrogatepass")) // 2 < MIN_PASSWORD_LENGTH:
+        missing.append("length")
+    if len(password.encode("utf-8", "surrogatepass")) > MAX_PASSWORD_BYTES:
+        missing.append("too_long")
+    if not CAPITAL.search(password):
+        missing.append("capital")
+    if not NUMBER.search(password):
+        missing.append("number")
+    if not SYMBOL.search(password):
+        missing.append("symbol")
+    return missing
+
+
+def require_new_password(value: object, source: str = PASSWORD_ENV) -> str:
+    """A password that may be set, or a refusal by name. The refusal says what
+    is missing and never repeats the password."""
+    password = require_password(value, source)
+    missing = password_missing(password)
+    if missing:
+        raise Refused(
+            REFUSAL_PASSWORD_RULE, source,
+            "a password is 8 to 72 characters, with a capital letter, a number and "
+            f"a symbol (missing: {', '.join(missing)}).",
+        )
+    return password
 
 
 def hash_password(password: str, parameters: ScryptParameters = SCRYPT) -> Credential:
