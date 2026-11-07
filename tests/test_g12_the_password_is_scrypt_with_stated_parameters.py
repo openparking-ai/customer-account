@@ -47,16 +47,23 @@ import pytest
 from customer_account import findings as f
 from customer_account.passwords import (
     KDF,
-    MIN_PASSWORD_BYTES,
+    MIN_PASSWORD_LENGTH,
     SCRYPT,
     Credential,
     ScryptParameters,
     hash_password,
+    require_new_password,
     require_password,
     verify,
 )
 from customer_account.store.postgres import tenant
-from customer_account.store.records import load_credential, set_password, verify_password
+from customer_account.store.records import (
+    _write_credential,
+    load_credential,
+    set_password,
+    start_email_change,
+    verify_password,
+)
 from store_harness import (
     A_PASSWORD,
     ANOTHER_PASSWORD,
@@ -100,20 +107,94 @@ def test_two_hashes_of_one_password_differ_by_salt_and_the_salt_is_from_the_cspr
 
 
 @pytest.mark.guarantee("G12")
-def test_the_minimum_length_is_the_one_rule_and_it_is_in_bytes():
-    with pytest.raises(f.Refused) as short:
-        require_password("a" * (MIN_PASSWORD_BYTES - 1))
-    assert short.value.code == f.REFUSAL_PASSWORD_TOO_SHORT
-    assert require_password("a" * MIN_PASSWORD_BYTES) == "a" * MIN_PASSWORD_BYTES
-    assert require_password("all lowercase words") == "all lowercase words"
-    # bytes, not characters: four 3-byte characters clear a 12-byte minimum
-    assert require_password("€€€€") == "€€€€"
+@pytest.mark.parametrize(
+    ("password", "missing"),
+    [
+        ("Abcde1!", "length"),
+        ("abcdefg1!", "capital"),
+        ("ABCDEFG!!", "number"),
+        ("Abcdefgh1", "symbol"),
+        ("Abcdefg1 ", "symbol"),
+        ("Abcdefg1~", "symbol"),
+        ("Abcdefg1`", "symbol"),
+        ("Ébcdefg1!", "capital"),
+        ("A1!" + "x" * 70, "too_long"),
+        ("A1!" + "é" * 35, "too_long"),
+    ],
+)
+def test_each_missing_part_of_a_new_password_is_refused_by_name(password, missing):
+    with pytest.raises(f.Refused) as refused:
+        require_new_password(password)
+    assert refused.value.code == f.REFUSAL_PASSWORD_RULE
+    assert refused.value.detail.endswith(f"(missing: {missing}).")
+    assert password not in str(refused.value)
+
+
+@pytest.mark.guarantee("G12")
+def test_every_symbol_on_the_list_is_accepted_and_the_longest_and_shortest_fit():
+    for symbol in """!@#$%^&*()_+-=[]{};':"\\|,.<>/?""":
+        assert require_new_password(f"Abcdefg1{symbol}") == f"Abcdefg1{symbol}"
+    assert MIN_PASSWORD_LENGTH == 8
+    assert require_new_password("A1!" + "x" * 69)
+    assert require_new_password("A1!" + "é" * 34)
+    assert require_new_password("Aa1!😀😀"), "an emoji is 2 toward the shortest"
+
+
+@pytest.mark.guarantee("G12")
+def test_checking_a_password_asks_only_that_one_was_given():
+    for old in ("all lowercase words", "€€€€", "x" * 500):
+        assert require_password(old) == old
     with pytest.raises(f.Refused) as none:
         require_password(None)
     assert none.value.code == f.REFUSAL_PASSWORD_NOT_GIVEN
     with pytest.raises(f.Refused) as empty:
         require_password("")
     assert empty.value.code == f.REFUSAL_PASSWORD_NOT_GIVEN
+
+
+def _with_old_password(app, tenant_id, password):
+    """A row as the old rule (at least 12 bytes, nothing else) left it: nothing
+    here passes the rule, because nothing here is setting a password today."""
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        _write_credential(cursor, tenant_id, customer_id, password, by="owner", at=CREATED_AT)
+    app.commit()
+    return customer_id
+
+
+OLD_PASSWORDS = {
+    "no capital, no number, no symbol": "all lowercase words",
+    "over 72 bytes": "an old sentence that runs on " * 10,
+    "a few bytes, each of three": "€€€€",
+}
+
+
+@pytest.mark.guarantee("G12")
+@store_test
+@pytest.mark.parametrize("password", OLD_PASSWORDS.values(), ids=OLD_PASSWORDS.keys())
+def test_a_password_kept_from_the_old_rule_is_still_checked_and_still_authorises(
+    app, tenant_id, password
+):
+    customer_id = _with_old_password(app, tenant_id, password)
+    with tenant(app, tenant_id) as cursor:
+        assert verify_password(cursor, tenant_id, customer_id, password).verified
+        assert not verify_password(cursor, tenant_id, customer_id, password + "x").verified
+        change = start_email_change(cursor, tenant_id, customer_id, "alice.new@example.com",
+                                    valid_minutes=30, at=CREATED_AT, password=password)
+        assert change["token"]
+    app.rollback()
+
+
+@pytest.mark.guarantee("G12")
+@store_test
+def test_the_old_rules_kind_of_password_cannot_be_set_any_more(app, tenant_id):
+    customer_id = seed_customer(app, tenant_id)
+    with tenant(app, tenant_id) as cursor:
+        with pytest.raises(f.Refused) as refused:
+            set_password(cursor, tenant_id, customer_id, "all lowercase words", by="owner",
+                         at=CREATED_AT)
+    assert refused.value.code == f.REFUSAL_PASSWORD_RULE
+    app.rollback()
 
 
 @pytest.mark.guarantee("G12")

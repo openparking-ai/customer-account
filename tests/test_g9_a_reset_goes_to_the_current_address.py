@@ -139,7 +139,7 @@ def test_the_new_password_is_held_to_the_same_rule_and_the_token_survives_the_re
     with tenant(app, tenant_id) as cursor:
         with pytest.raises(f.Refused) as refused:
             consume_password_reset(cursor, tenant_id, reset["token"], "short", at=CREATED_AT)
-        assert refused.value.code == f.REFUSAL_PASSWORD_TOO_SHORT
+        assert refused.value.code == f.REFUSAL_PASSWORD_RULE
     app.rollback()
     with tenant(app, tenant_id) as cursor:
         consume_password_reset(cursor, tenant_id, reset["token"], ANOTHER_PASSWORD,

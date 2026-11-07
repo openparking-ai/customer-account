@@ -171,10 +171,10 @@ def test_the_token_is_rendered_by_the_issue_call_and_by_nothing_else_and_the_pas
                        "--valid-minutes", "30", "--by", "owner", "--at", at])
     second_reset = json.loads(superseding["printed"])["token"]
     cancelled = run(["consume-password-reset", *T, "--at", "2026-06-01T09:05:00-06:00"],
-                    "a replacement passphrase", token=reset_token)
+                    "A-replacement-passphrase-3", token=reset_token)
     assert '"REFUSAL_TOKEN_CANCELLED"' in cancelled["printed"]
     consumed = run(["consume-password-reset", *T, "--at", "2026-06-01T09:05:00-06:00"],
-                   "a replacement passphrase", token=second_reset)
+                   "A-replacement-passphrase-3", token=second_reset)
     assert consumed["status"] == 0, consumed
     wrong = run(["verify-password", *T, "--customer", str(customer_id)], A_PASSWORD)
     assert wrong["status"] == 1
@@ -189,7 +189,7 @@ def test_the_token_is_rendered_by_the_issue_call_and_by_nothing_else_and_the_pas
                                      "start-password-reset")):
         holders = [command for command, text in printed if plaintext in text]
         assert holders == [issuer], f"the {name} was rendered by {holders}"
-    for password in (A_PASSWORD, "a replacement passphrase"):
+    for password in (A_PASSWORD, "A-replacement-passphrase-3"):
         holders = [command for command, text in printed if password in text]
         assert holders == [], f"the password was rendered by {holders}"
     with owner.cursor() as cursor:

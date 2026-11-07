@@ -50,7 +50,8 @@ from customer_account.consent import Channel  # noqa: E402
 from customer_account.findings import NOT_VERIFIED_MEANS, REFUSALS, VERIFICATIONS  # noqa: E402
 from customer_account.passwords import (  # noqa: E402
     KDF,
-    MIN_PASSWORD_BYTES,
+    MAX_PASSWORD_BYTES,
+    MIN_PASSWORD_LENGTH,
     PASSWORD_ENV,
     SALT_BYTES,
     SCRYPT,
@@ -111,8 +112,9 @@ def block_password() -> str:
         "from the CSPRNG. Measured by `scripts/measure_scrypt.py`, not chosen; stored "
         "beside every hash, so a row written under other values still verifies and "
         "raising them invalidates nothing.",
-        f"- **The one rule on a password:** at least {MIN_PASSWORD_BYTES} bytes of UTF-8. "
-        "No character classes, no dictionary.",
+        f"- **The rule on a new password:** {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_BYTES} "
+        "characters, with at least one capital letter, one number and one symbol. Only "
+        "setting a password is refused: one set under an older rule still works.",
         f"- **Where a password is read from:** the environment variable `{PASSWORD_ENV}`, "
         "never an argument.",
         f"- **A token's typed states:** {', '.join('`' + s.value + '`' for s in TokenState)}; "
