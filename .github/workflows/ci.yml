@@ -187,7 +187,7 @@ jobs:
 
           # No credential yet: verify answers NO_CREDENTIAL by name, exit 1 -- and
           # it is NOT exit 0. This is the positive control for the line below.
-          export CUSTOMER_ACCOUNT_PASSWORD="correct horse battery"
+          export CUSTOMER_ACCOUNT_PASSWORD="Correct-horse-battery-1"
           if customer-account verify-password $T --customer "$CID" | tee "$RUNNER_TEMP/none.txt"; then
             echo "a customer with no credential verified"; exit 1
           fi
@@ -208,7 +208,7 @@ jobs:
             | tee "$RUNNER_TEMP/reset.txt"
           grep -q '"deliver_to": "holder@example.com"' "$RUNNER_TEMP/reset.txt"
           TOKEN=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['token'])" "$RUNNER_TEMP/reset.txt")
-          printf '%s\n' "$TOKEN" | CUSTOMER_ACCOUNT_PASSWORD="a brand new passphrase" \
+          printf '%s\n' "$TOKEN" | CUSTOMER_ACCOUNT_PASSWORD="A-brand-new-passphrase-2" \
             customer-account consume-password-reset $T --at 2026-06-01T09:10:00-06:00 | grep -q '"replaced"'
           if printf '%s\n' "$TOKEN" | customer-account consume-password-reset $T --at 2026-06-01T09:11:00-06:00 \
                | tee "$RUNNER_TEMP/used.txt"; then
